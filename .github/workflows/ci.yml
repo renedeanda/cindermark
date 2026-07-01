@@ -3,9 +3,11 @@ name: CI
 # Linux-only by design: the core crate is platform-independent, and Linux
 # runners are free for public repos. Apple artifacts are built by the
 # manual-dispatch release workflow instead (macOS runners cost money).
+# push is limited to main so PR branches don't run CI twice
+# (the pull_request trigger already covers them).
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 env:
