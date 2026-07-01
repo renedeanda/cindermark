@@ -1,0 +1,168 @@
+namespace cindermark {};
+
+[Enum]
+interface FfiBlockType {
+    Heading();
+    Paragraph();
+    CodeBlock();
+    Blockquote();
+    BulletList();
+    OrderedList();
+    Checkbox();
+    Table();
+    HorizontalRule();
+    Empty();
+    FootnoteDefinition();
+    ImageMarker();
+    BulletItem();
+    NumberedItem();
+    // Obsidian-style callout. `kind` is 0=note, 1=tip, 2=warning, 3=important,
+    // 4=caution. Custom title (if any) is passed via the block's `language` field.
+    Callout(u8 kind);
+    // Mermaid diagram fenced block. `diagram_type` is a u8 mapping to the
+    // MermaidDiagramType enum (0=Unknown, 1=Flowchart, 2=Graph, 3=SequenceDiagram,
+    // 4=ClassDiagram, 5=StateDiagram, 6=ErDiagram, 7=Gantt, 8=Mindmap, 9=Pie,
+    // 10=Journey, 11=Timeline, 12=GitGraph, 13=C4, 14=RequirementDiagram,
+    // 15=Quadrant, 16=Sankey, 17=XYChart, 18=Block, 19=Packet, 20=Architecture,
+    // 21=Kanban, 22=Radar). Source is carried in the block's `text` field.
+    MermaidDiagram(u8 diagram_type);
+};
+
+[Enum]
+interface FfiInlineType {
+    Bold();
+    Italic();
+    BoldItalic();
+    Strikethrough();
+    UnderlineTilde();
+    UnderlineHtml();
+    InlineCode();
+    Highlight();
+    HighlightColor(u8 color_index);
+    // Highlight backed by an arbitrary hex color (`=={#RRGGBB}text==`).
+    HighlightHex(string hex);
+    Link(string url);
+    AutoLink(string url);
+    WikiLink();
+    FootnoteRef();
+    // `%%hidden%%` drafting comment — faded in editor, stripped from preview.
+    Comment();
+    // Inline hex color literal. `hex` is normalized 6-digit lowercase.
+    HexColor(string hex);
+};
+
+dictionary FfiInlineSpan {
+    FfiInlineType inline_type;
+    u32 utf16_start;
+    u32 utf16_end;
+    u32 content_utf16_start;
+    u32 content_utf16_end;
+};
+
+dictionary FfiListItem {
+    string text;
+    sequence<FfiInlineSpan> inline_spans;
+};
+
+dictionary FfiBlock {
+    FfiBlockType block_type;
+    u32 line_start;
+    u32 line_end;
+    u32 utf16_start;
+    u32 utf16_end;
+    u32 list_indent;
+    u32 marker_utf16_start;
+    u32 marker_utf16_end;
+    string marker_source;
+    string unordered_marker;
+    string ordered_delimiter;
+    string ordered_raw_number;
+    u8 heading_level;
+    u32 number;
+    boolean is_checked;
+    string? language;
+    string text;
+    sequence<FfiInlineSpan> inline_spans;
+    sequence<FfiListItem> list_items;
+    sequence<string> table_headers;
+    sequence<sequence<string>> table_rows;
+    sequence<u8> table_alignments;
+};
+
+dictionary FfiDocumentStats {
+    u32 word_count;
+    u32 character_count;
+    u32 character_count_no_spaces;
+    u32 paragraph_count;
+    u32 sentence_count;
+    u32 checkbox_total;
+    u32 checkbox_completed;
+    u32 reading_time_seconds;
+    u32 heading_count;
+    u32 link_count;
+    u32 code_block_count;
+    u32 mermaid_diagram_count;
+};
+
+dictionary FfiHeading {
+    u8 level;
+    string text;
+};
+
+dictionary FfiParseResult {
+    sequence<FfiBlock> blocks;
+    u32 line_count;
+    FfiDocumentStats stats;
+    sequence<string> wiki_links;
+    sequence<FfiHeading> headings;
+};
+
+dictionary FfiSaveParseResult {
+    sequence<FfiBlock> blocks;
+    u32 line_count;
+    FfiDocumentStats stats;
+    sequence<string> wiki_links;
+    sequence<FfiHeading> headings;
+    FfiRenderedPreview short_preview;
+    FfiRenderedPreview long_preview;
+};
+
+dictionary FfiIncrementalResult {
+    sequence<FfiBlock> blocks;
+    u32 line_count;
+    u32 dirty_start;
+    u32 dirty_end;
+    FfiDocumentStats stats;
+};
+
+dictionary FfiIncrementalStyleResult {
+    sequence<FfiBlock> blocks;
+    u32 line_count;
+    u32 dirty_start;
+    u32 dirty_end;
+};
+
+dictionary FfiPreviewSpan {
+    FfiInlineType span_type;
+    u32 start;
+    u32 end;
+};
+
+dictionary FfiRenderedPreview {
+    string plain_text;
+    sequence<FfiPreviewSpan> spans;
+};
+
+interface CindermarkParser {
+    constructor(optional string? image_marker_scheme = null);
+    FfiParseResult parse(string text);
+    FfiParseResult parse_editable(string text);
+    FfiIncrementalResult parse_editable_incremental(string text, u32 edit_utf16_start, u32 edit_old_utf16_len, u32 edit_new_utf16_len);
+    FfiIncrementalStyleResult parse_editable_incremental_style_only(string text, u32 edit_utf16_start, u32 edit_old_utf16_len, u32 edit_new_utf16_len);
+    void reset_state();
+    sequence<string> extract_wiki_links(string text);
+    string toggle_checkbox(string text, u32 line_index);
+    FfiRenderedPreview render_preview(string text, u32 max_chars);
+    sequence<FfiRenderedPreview> render_previews(string text, u32 short_max, u32 long_max);
+    FfiSaveParseResult parse_for_save(string text, u32 short_preview_max, u32 long_preview_max);
+};

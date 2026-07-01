@@ -1,0 +1,71 @@
+[package]
+name = "cindermark"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance incremental Markdown parser with UTF-16 offsets, built for native text editors on Apple platforms"
+license = "MIT"
+repository = "https://github.com/renedeanda/cindermark"
+readme = "README.md"
+keywords = ["markdown", "parser", "incremental", "commonmark", "uniffi"]
+categories = ["parser-implementations", "text-processing"]
+
+[lib]
+crate-type = ["staticlib", "cdylib", "lib"]
+name = "cindermark"
+
+[dependencies]
+uniffi = { version = "0.28", features = ["cli"] }
+memchr = "2"
+rustc-hash = "2"
+unicode-segmentation = "1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
+
+[profile.release]
+# Production-grade tuning — this profile is what ships inside host apps
+# (e.g. Ember Notes' App Store builds). Cargo's default release profile is
+# opt-level=3 / codegen-units=16 / no LTO. These overrides take the parser
+# the rest of the way:
+#   - lto = "fat":           full link-time optimization across crates. ~10-20%
+#                            runtime win on tight parser hot loops; produces a
+#                            single inlined .a, smaller and faster.
+#   - codegen-units = 1:     single codegen unit. Slower archive (~30s → ~2-3min
+#                            for parser slice), tighter optimization, smaller
+#                            binary. Acceptable since archives are infrequent.
+#   - strip = true:          drop debug symbols. ~50% smaller .a (27 MB → ~12 MB),
+#                            keeps the app binary slim. Crash logs lose Rust
+#                            frame symbols; disable if you symbolicate them.
+#   - panic = "unwind":      DELIBERATELY kept as the default. Skipping
+#                            `panic = "abort"` preserves UniFFI's contract for
+#                            converting Rust panics into Swift errors via
+#                            `FfiConverterRustBuffer`. `abort` would terminate
+#                            the host app on any parser panic instead of
+#                            surfacing a recoverable Swift throw.
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.dev-optimized]
+inherits = "release"
+debug = 1
+incremental = true
+# Opt the local-dev profile OUT of the heavy release tuning so iterative
+# `./build-apple.sh dev` rebuilds stay snappy. Without these overrides, the
+# inheritance from `release` would also drag in LTO + codegen-units = 1
+# and turn every local parser change into a 2-3 minute wait.
+lto = false
+codegen-units = 16
+strip = false
+
+[[bench]]
+name = "parser_bench"
+harness = false
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
