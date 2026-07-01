@@ -28,15 +28,15 @@ relative deltas are what matter.
 
 <!-- Updated by perf commits; see git history for per-change deltas. -->
 
-| Benchmark | Time |
-|---|---|
-| parse_500_lines | ~1.3 ms |
-| parse_2500_lines | ~6.6 ms |
-| parse_editable_500_lines | ~1.5 ms |
-| incremental_keystroke_500 | (see latest bench run) |
-| incremental_keystroke_2500 | (see latest bench run) |
-| incremental_keystroke_10k | (see latest bench run) |
-| incremental_with_stats_2500 | (see latest bench run) |
+| Benchmark | Time | vs. pre-clone-elimination |
+|---|---|---|
+| parse_500_lines | ~1.30 ms | — |
+| parse_2500_lines | ~7.3 ms | — |
+| parse_editable_500_lines | ~1.39 ms | −7% |
+| incremental_keystroke_500 | ~255 µs | −33% |
+| incremental_keystroke_2500 | ~1.30 ms | −34% |
+| incremental_keystroke_10k | ~8.7 ms | −14% |
+| incremental_with_stats_2500 | ~3.85 ms | −28% |
 
 ## What the FFI boundary costs
 

@@ -90,11 +90,13 @@ Numbers from `cargo bench` (criterion) on x86_64 Linux; release profile with fat
 
 | Benchmark | Time |
 |---|---|
+| Incremental keystroke, 500-line note | ~255 µs |
+| Incremental keystroke, 2,500-line note | ~1.3 ms |
+| Incremental keystroke, 10,000-line note | ~8.7 ms |
 | Full parse, 500-line note | ~1.3 ms |
-| Full parse, 2,500-line note | ~6.6 ms |
-| Editable-mode parse, 500 lines | ~1.5 ms |
+| Full parse, 2,500-line note | ~7.3 ms |
 
-The design targets the editor's real budget: a keystroke must parse well inside a 400 ms debounce window even on 10,000-line documents.
+The design targets the editor's real budget: a debounced keystroke on a large document must cost single-digit milliseconds, and it does — even at 10,000 lines.
 
 ## Architecture
 

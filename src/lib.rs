@@ -531,7 +531,7 @@ fn convert_block(block: &BlockNode) -> FfiBlock {
 /// Compute document statistics from the source text and parsed AST.
 /// Character counts use extended grapheme clusters (matching Swift's `String.count`)
 /// so emoji like 👨‍👩‍👧‍👦 count as 1 character, not 7 code points.
-fn compute_stats(source: &str, doc: &Document) -> FfiDocumentStats {
+fn compute_stats(source: &str, blocks: &[BlockNode]) -> FfiDocumentStats {
     use unicode_segmentation::UnicodeSegmentation;
 
     let bytes = source.as_bytes();
@@ -597,7 +597,7 @@ fn compute_stats(source: &str, doc: &Document) -> FfiDocumentStats {
     let mut code_block_count: u32 = 0;
     let mut mermaid_diagram_count: u32 = 0;
 
-    for block in &doc.blocks {
+    for block in blocks {
         match &block.kind {
             BlockKind::Paragraph { .. } | BlockKind::Blockquote { .. } => {
                 paragraph_count += 1;
@@ -763,7 +763,7 @@ fn extract_headings_from_doc(doc: &Document) -> Vec<FfiHeading> {
 }
 
 fn convert_document(doc: &Document, source: &str) -> FfiParseResult {
-    let stats = compute_stats(source, doc);
+    let stats = compute_stats(source, &doc.blocks);
     let wiki_links = extract_wiki_links_from_doc(doc, source);
     let headings = extract_headings_from_doc(doc);
     FfiParseResult {
@@ -804,16 +804,20 @@ impl CindermarkParser {
         let doc = parser::parse(&text, ParseMode::Editable);
         let utf16_map = utf16::Utf16Map::build(text.as_bytes());
 
-        // Store snapshot for future incremental updates.
+        let result = convert_document(&doc, &text);
+
+        // Store snapshot for future incremental updates. The conversion
+        // above only borrowed the AST, so the block list is moved into the
+        // snapshot instead of cloned.
         let mut state = self.state.lock().unwrap();
         *state = Some(incremental::ParseSnapshot::new(
-            doc.blocks.clone(),
+            doc.blocks,
             doc.line_count,
             text.len(),
             utf16_map.total_utf16_len,
         ));
 
-        convert_document(&doc, &text)
+        result
     }
 
     /// Incremental parse after a text edit. Re-parses only the dirty blocks.
@@ -855,23 +859,22 @@ impl CindermarkParser {
             }
         };
 
-        // Update snapshot for next incremental call.
+        // Stats and FFI conversion only borrow the block list...
+        let stats = compute_stats(&text, &result.blocks);
+        let blocks: Vec<FfiBlock> = result.blocks.iter().map(convert_block).collect();
+
+        // ...so it is moved (not cloned) into the snapshot for the next
+        // incremental call. This path runs per keystroke; the two clones it
+        // used to make were full O(document) passes.
         *state = Some(incremental::ParseSnapshot::new(
-            result.blocks.clone(),
+            result.blocks,
             result.line_count,
             text.len(),
             result.total_utf16_len,
         ));
 
-        // Build a temporary Document for stats computation (reuses existing block vec)
-        let temp_doc = Document {
-            blocks: result.blocks.clone(),
-            line_count: result.line_count,
-        };
-        let stats = compute_stats(&text, &temp_doc);
-
         FfiIncrementalResult {
-            blocks: result.blocks.iter().map(convert_block).collect(),
+            blocks,
             line_count: result.line_count,
             dirty_start: result.dirty_start,
             dirty_end: result.dirty_end,
@@ -914,9 +917,13 @@ impl CindermarkParser {
             }
         };
 
-        // Update snapshot — uses total_utf16_len from the result, no extra Utf16Map::build.
+        // FFI conversion only borrows the block list...
+        let blocks: Vec<FfiBlock> = result.blocks.iter().map(convert_block).collect();
+
+        // ...so it is moved (not cloned) into the snapshot. Uses
+        // total_utf16_len from the result — no extra Utf16Map::build.
         *state = Some(incremental::ParseSnapshot::new(
-            result.blocks.clone(),
+            result.blocks,
             result.line_count,
             text.len(),
             result.total_utf16_len,
@@ -924,7 +931,7 @@ impl CindermarkParser {
 
         // No compute_stats — that's the whole point of this variant.
         FfiIncrementalStyleResult {
-            blocks: result.blocks.iter().map(convert_block).collect(),
+            blocks,
             line_count: result.line_count,
             dirty_start: result.dirty_start,
             dirty_end: result.dirty_end,
@@ -980,7 +987,7 @@ impl CindermarkParser {
         long_preview_max: u32,
     ) -> FfiSaveParseResult {
         let doc = parser::parse(&text, ParseMode::Grouped);
-        let stats = compute_stats(&text, &doc);
+        let stats = compute_stats(&text, &doc.blocks);
         let wiki_links = extract_wiki_links_from_doc(&doc, &text);
         let headings = extract_headings_from_doc(&doc);
         let blocks = doc.blocks.iter().map(convert_block).collect();
