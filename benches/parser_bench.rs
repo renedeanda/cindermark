@@ -46,10 +46,85 @@ fn bench_parse_editable_500(c: &mut Criterion) {
     });
 }
 
+/// Steady-state incremental keystroke benchmark.
+///
+/// Seeds the parser snapshot with a full editable parse, then alternates
+/// inserting and deleting one character mid-document. Each call's text is
+/// consistent with the previous snapshot plus the claimed edit, so the
+/// parser stays on the incremental path (no re-seeding needed) and the
+/// measurement reflects what an editor pays per debounced keystroke.
+/// The text clone inside the loop is deliberate: the real FFI call passes
+/// an owned String across the boundary too.
+fn bench_incremental_keystroke(c: &mut Criterion, name: &str, lines: usize, with_stats: bool) {
+    let base = generate_note(lines);
+    // Edit inside a plain paragraph in the middle of the note — the common
+    // case, which must not fall back to a full re-parse.
+    let mid = base.len() / 2;
+    let pos = mid
+        + base[mid..]
+            .find("Regular paragraph")
+            .expect("generated note contains paragraph lines")
+        + "Regular ".len();
+    let mut edited = base.clone();
+    edited.insert(pos, 'x');
+
+    let parser = CindermarkParser::new();
+    parser.parse_editable(base.clone());
+
+    // The generated note is pure ASCII, so byte offset == UTF-16 offset.
+    let utf16_pos = pos as u32;
+    let mut inserted = false;
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            let (text, old_len, new_len) = if inserted {
+                (base.clone(), 1, 0)
+            } else {
+                (edited.clone(), 0, 1)
+            };
+            inserted = !inserted;
+            if with_stats {
+                black_box(parser.parse_editable_incremental(
+                    black_box(text),
+                    utf16_pos,
+                    old_len,
+                    new_len,
+                ));
+            } else {
+                black_box(parser.parse_editable_incremental_style_only(
+                    black_box(text),
+                    utf16_pos,
+                    old_len,
+                    new_len,
+                ));
+            }
+        })
+    });
+}
+
+fn bench_incremental_500(c: &mut Criterion) {
+    bench_incremental_keystroke(c, "incremental_keystroke_500", 500, false);
+}
+
+fn bench_incremental_2500(c: &mut Criterion) {
+    bench_incremental_keystroke(c, "incremental_keystroke_2500", 2500, false);
+}
+
+fn bench_incremental_10k(c: &mut Criterion) {
+    bench_incremental_keystroke(c, "incremental_keystroke_10k", 10_000, false);
+}
+
+fn bench_incremental_with_stats_2500(c: &mut Criterion) {
+    bench_incremental_keystroke(c, "incremental_with_stats_2500", 2500, true);
+}
+
 criterion_group!(
     benches,
     bench_parse_500,
     bench_parse_2500,
-    bench_parse_editable_500
+    bench_parse_editable_500,
+    bench_incremental_500,
+    bench_incremental_2500,
+    bench_incremental_10k,
+    bench_incremental_with_stats_2500
 );
 criterion_main!(benches);
