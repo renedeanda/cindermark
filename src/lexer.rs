@@ -522,12 +522,9 @@ impl<'a> Lexer<'a> {
                 self.tokens
                     .push(Token::new(TokenKind::TablePipe, start as u32, 1));
             }
-            b'<' => {
-                if self.try_html_underline_open() || self.try_html_underline_close() {
-                    // Token already emitted
-                } else {
-                    self.scan_text_run();
-                }
+            // When the guard fails, `<` falls through to the text-run arm.
+            b'<' if self.try_html_underline_open() || self.try_html_underline_close() => {
+                // Token already emitted by the guard.
             }
             _ => {
                 self.scan_text_run();

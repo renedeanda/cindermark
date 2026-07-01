@@ -1146,17 +1146,15 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
                     }
                 }
             }
-            BlockKind::BulletItem { text } | BlockKind::NumberedItem { text, .. } => {
-                if !text.is_empty() {
-                    raw_parts.push(text.clone());
-                    approx_len += text.len();
-                }
+            BlockKind::BulletItem { text } | BlockKind::NumberedItem { text, .. }
+                if !text.is_empty() =>
+            {
+                raw_parts.push(text.clone());
+                approx_len += text.len();
             }
-            BlockKind::Callout { text, .. } => {
-                if !text.is_empty() {
-                    raw_parts.push(text.clone());
-                    approx_len += text.len();
-                }
+            BlockKind::Callout { text, .. } if !text.is_empty() => {
+                raw_parts.push(text.clone());
+                approx_len += text.len();
             }
             // Skip code blocks, tables, rules, empty lines, image markers,
             // and footnote definitions
