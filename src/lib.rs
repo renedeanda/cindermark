@@ -777,31 +777,61 @@ fn convert_document(doc: &Document, source: &str) -> FfiParseResult {
 
 // MARK: - CindermarkParser (UniFFI-exported object)
 
+/// Validate an image-marker scheme received across the FFI boundary.
+/// Returns `None` (extension off) for anything that could not work as a
+/// literal `![](<scheme><UUID>)` prefix, instead of panicking.
+fn sanitize_scheme(scheme: Option<String>) -> Option<String> {
+    let s = scheme?;
+    if s.is_empty()
+        || !s.is_ascii()
+        || s.bytes()
+            .any(|b| b == b'(' || b == b')' || b.is_ascii_whitespace())
+    {
+        return None;
+    }
+    Some(s)
+}
+
 /// The main parser object exposed to Swift via UniFFI.
 ///
 /// Thread-safe: uses a Mutex internally. Each editor instance should
 /// create its own `CindermarkParser` for incremental update support.
 pub struct CindermarkParser {
     state: Mutex<Option<incremental::ParseSnapshot>>,
+    options: parser::ParseOptions,
 }
 
 impl CindermarkParser {
-    pub fn new() -> Self {
+    /// Create a parser.
+    ///
+    /// `image_marker_scheme` opts in to the block-level image / attachment
+    /// marker extension: `![](<scheme><UUID>)` on a line by itself parses as
+    /// an `ImageMarker` block instead of a paragraph. The scheme is the
+    /// literal prefix including any trailing colon (Ember Notes passes
+    /// `"ember:"`). Pass `None` for CommonMark-clean default behavior.
+    ///
+    /// Invalid schemes (empty, non-ASCII, or containing whitespace,
+    /// parentheses, or newlines) are treated as `None` rather than
+    /// panicking — this constructor is called across the FFI boundary.
+    pub fn new(image_marker_scheme: Option<String>) -> Self {
         Self {
             state: Mutex::new(None),
+            options: parser::ParseOptions {
+                image_marker_scheme: sanitize_scheme(image_marker_scheme),
+            },
         }
     }
 
     /// Full parse in grouped mode (for rendering). Does not affect incremental state.
     pub fn parse(&self, text: String) -> FfiParseResult {
-        let doc = parser::parse(&text, ParseMode::Grouped);
+        let doc = parser::parse_with_options(&text, ParseMode::Grouped, &self.options);
         convert_document(&doc, &text)
     }
 
     /// Full parse in editable mode (for block editor).
     /// Stores a snapshot for subsequent incremental updates.
     pub fn parse_editable(&self, text: String) -> FfiParseResult {
-        let doc = parser::parse(&text, ParseMode::Editable);
+        let doc = parser::parse_with_options(&text, ParseMode::Editable, &self.options);
         let utf16_map = utf16::Utf16Map::build(text.as_bytes());
 
         let result = convert_document(&doc, &text);
@@ -844,10 +874,11 @@ impl CindermarkParser {
                 edit_utf16_start,
                 edit_old_utf16_len,
                 edit_new_utf16_len,
+                &self.options,
             )
         } else {
             // No previous state — do full parse.
-            let doc = parser::parse(&text, ParseMode::Editable);
+            let doc = parser::parse_with_options(&text, ParseMode::Editable, &self.options);
             let block_count = doc.blocks.len() as u32;
             let utf16_map = utf16::Utf16Map::build(text.as_bytes());
             incremental::IncrementalResult {
@@ -902,10 +933,11 @@ impl CindermarkParser {
                 edit_utf16_start,
                 edit_old_utf16_len,
                 edit_new_utf16_len,
+                &self.options,
             )
         } else {
             // No previous state — do full parse.
-            let doc = parser::parse(&text, ParseMode::Editable);
+            let doc = parser::parse_with_options(&text, ParseMode::Editable, &self.options);
             let block_count = doc.blocks.len() as u32;
             let utf16_map = utf16::Utf16Map::build(text.as_bytes());
             incremental::IncrementalResult {
@@ -962,7 +994,7 @@ impl CindermarkParser {
     ///
     /// `max_chars` limits the preview length in UTF-16 code units.
     pub fn render_preview(&self, text: String, max_chars: u32) -> FfiRenderedPreview {
-        render_preview_impl(&text, max_chars)
+        render_preview_impl(&text, max_chars, &self.options)
     }
 
     /// Render two previews (short + long) from a single parse pass.
@@ -973,7 +1005,7 @@ impl CindermarkParser {
         short_max: u32,
         long_max: u32,
     ) -> Vec<FfiRenderedPreview> {
-        render_previews_impl(&text, short_max, long_max)
+        render_previews_impl(&text, short_max, long_max, &self.options)
     }
 
     /// Combined parse + preview in a single pass. Returns everything needed for note save:
@@ -986,7 +1018,7 @@ impl CindermarkParser {
         short_preview_max: u32,
         long_preview_max: u32,
     ) -> FfiSaveParseResult {
-        let doc = parser::parse(&text, ParseMode::Grouped);
+        let doc = parser::parse_with_options(&text, ParseMode::Grouped, &self.options);
         let stats = compute_stats(&text, &doc.blocks);
         let wiki_links = extract_wiki_links_from_doc(&doc, &text);
         let headings = extract_headings_from_doc(&doc);
@@ -1059,8 +1091,12 @@ struct CleanPreview {
 /// 4. Strip inline markers and remap span positions
 ///
 /// Truncation to specific lengths is cheap on top of this result.
-fn build_clean_preview(text: &str, approx_limit: usize) -> Option<CleanPreview> {
-    let doc = parser::parse(text, ParseMode::Grouped);
+fn build_clean_preview(
+    text: &str,
+    approx_limit: usize,
+    options: &parser::ParseOptions,
+) -> Option<CleanPreview> {
+    let doc = parser::parse_with_options(text, ParseMode::Grouped, options);
     build_clean_preview_from_doc(&doc, approx_limit)
 }
 
@@ -1266,14 +1302,18 @@ fn truncate_preview(preview: &CleanPreview, max_chars: u32) -> FfiRenderedPrevie
     }
 }
 
-fn render_preview_impl(text: &str, max_chars: u32) -> FfiRenderedPreview {
+fn render_preview_impl(
+    text: &str,
+    max_chars: u32,
+    options: &parser::ParseOptions,
+) -> FfiRenderedPreview {
     if text.is_empty() {
         return FfiRenderedPreview {
             plain_text: String::new(),
             spans: Vec::new(),
         };
     }
-    match build_clean_preview(text, max_chars as usize) {
+    match build_clean_preview(text, max_chars as usize, options) {
         Some(preview) => truncate_preview(&preview, max_chars),
         None => FfiRenderedPreview {
             plain_text: String::new(),
@@ -1283,7 +1323,12 @@ fn render_preview_impl(text: &str, max_chars: u32) -> FfiRenderedPreview {
 }
 
 /// Render two previews (short + long) from a single parse pass.
-fn render_previews_impl(text: &str, short_max: u32, long_max: u32) -> Vec<FfiRenderedPreview> {
+fn render_previews_impl(
+    text: &str,
+    short_max: u32,
+    long_max: u32,
+    options: &parser::ParseOptions,
+) -> Vec<FfiRenderedPreview> {
     if text.is_empty() {
         let empty = FfiRenderedPreview {
             plain_text: String::new(),
@@ -1293,7 +1338,7 @@ fn render_previews_impl(text: &str, short_max: u32, long_max: u32) -> Vec<FfiRen
     }
     // Use the larger limit for the shared parse so we collect enough content for both.
     let limit = std::cmp::max(short_max, long_max) as usize;
-    match build_clean_preview(text, limit) {
+    match build_clean_preview(text, limit, options) {
         Some(preview) => {
             let short = truncate_preview(&preview, short_max);
             let long = truncate_preview(&preview, long_max);
@@ -1311,7 +1356,7 @@ fn render_previews_impl(text: &str, short_max: u32, long_max: u32) -> Vec<FfiRen
 
 impl Default for CindermarkParser {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -1322,9 +1367,67 @@ uniffi::include_scaffolding!("cindermark");
 mod tests {
     use super::*;
 
+    // MARK: - Image marker scheme (constructor option)
+
+    const MARKER: &str = "![](ember:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)";
+
+    #[test]
+    fn scheme_constructor_enables_image_markers() {
+        let parser = CindermarkParser::new(Some("ember:".to_string()));
+        let result = parser.parse_editable(format!("{}\n", MARKER));
+        assert!(matches!(
+            result.blocks[0].block_type,
+            FfiBlockType::ImageMarker
+        ));
+    }
+
+    #[test]
+    fn no_scheme_leaves_marker_lines_as_paragraphs() {
+        let parser = CindermarkParser::new(None);
+        let result = parser.parse_editable(format!("{}\n", MARKER));
+        assert!(matches!(
+            result.blocks[0].block_type,
+            FfiBlockType::Paragraph
+        ));
+    }
+
+    #[test]
+    fn invalid_scheme_is_sanitized_to_none() {
+        for bad in ["", "has space:", "paren):", "émber:", "new\nline:"] {
+            let parser = CindermarkParser::new(Some(bad.to_string()));
+            let result = parser.parse_editable(format!("{}\n", MARKER));
+            assert!(
+                matches!(result.blocks[0].block_type, FfiBlockType::Paragraph),
+                "scheme {:?} should be rejected, not panic or match",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_parse_respects_scheme() {
+        // Options must flow into the incremental engine: an edit elsewhere
+        // in the document must not demote the marker block to a paragraph.
+        let parser = CindermarkParser::new(Some("ember:".to_string()));
+        let base = format!("# Title\n\n{}\n\nSome paragraph\n", MARKER);
+        parser.parse_editable(base.clone());
+
+        let edited = base.replace("Some paragraph", "Some paragraphX");
+        let edit_start = base.find("Some paragraph").unwrap() as u32 + 14;
+        let result = parser.parse_editable_incremental_style_only(edited, edit_start, 0, 1);
+
+        assert!(
+            result
+                .blocks
+                .iter()
+                .any(|b| matches!(b.block_type, FfiBlockType::ImageMarker)),
+            "image marker must survive incremental updates"
+        );
+    }
+
     #[test]
     fn stats_word_and_sentence_counts() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("Hello world. This is a test!".to_string());
         assert_eq!(result.stats.word_count, 6);
         assert_eq!(result.stats.sentence_count, 2);
@@ -1334,7 +1437,7 @@ mod tests {
 
     #[test]
     fn stats_checkboxes() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse_editable("- [x] Done\n- [ ] Todo\n- [X] Also done".to_string());
         assert_eq!(result.stats.checkbox_total, 3);
         assert_eq!(result.stats.checkbox_completed, 2);
@@ -1342,7 +1445,7 @@ mod tests {
 
     #[test]
     fn stats_headings_and_code_blocks() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("# Title\n\n## Subtitle\n\n```rust\nlet x = 1;\n```".to_string());
         assert_eq!(result.stats.heading_count, 2);
         assert_eq!(result.stats.code_block_count, 1);
@@ -1350,7 +1453,7 @@ mod tests {
 
     #[test]
     fn stats_ellipsis_not_multiple_sentences() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("Wait... really?".to_string());
         // "..." should count as 1 sentence ending, "?" as another = 2
         assert_eq!(result.stats.sentence_count, 2);
@@ -1358,7 +1461,7 @@ mod tests {
 
     #[test]
     fn stats_grapheme_clusters_match_swift() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         // Family emoji: 1 grapheme cluster (matches Swift String.count)
         let result = parser.parse("👨‍👩‍👧‍👦".to_string());
         assert_eq!(result.stats.character_count, 1);
@@ -1379,7 +1482,7 @@ mod tests {
 
     #[test]
     fn stats_empty_document() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse(String::new());
         assert_eq!(result.stats.word_count, 0);
         assert_eq!(result.stats.sentence_count, 0);
@@ -1389,7 +1492,7 @@ mod tests {
 
     #[test]
     fn stats_reading_time() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         // 200 words → 60 seconds
         let words: String = (0..200)
             .map(|i| format!("word{}", i))
@@ -1401,7 +1504,7 @@ mod tests {
 
     #[test]
     fn ffi_parse_basic() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("# Hello\n\nWorld".to_string());
         assert_eq!(result.blocks.len(), 3); // heading, empty, paragraph
         assert_eq!(result.blocks[0].block_type, FfiBlockType::Heading);
@@ -1411,7 +1514,7 @@ mod tests {
 
     #[test]
     fn ffi_parse_editable() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse_editable("- item 1\n- item 2".to_string());
         assert_eq!(result.blocks.len(), 2);
         assert_eq!(result.blocks[0].block_type, FfiBlockType::BulletItem);
@@ -1420,21 +1523,21 @@ mod tests {
 
     #[test]
     fn ffi_extract_wiki_links() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let links = parser.extract_wiki_links("see [[Note One]] and [[Note Two]]".to_string());
         assert_eq!(links, vec!["Note One", "Note Two"]);
     }
 
     #[test]
     fn ffi_toggle_checkbox() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.toggle_checkbox("- [ ] task".to_string(), 0);
         assert_eq!(result, "- [x] task");
     }
 
     #[test]
     fn ffi_inline_spans_present() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("**bold** text".to_string());
         assert!(!result.blocks[0].inline_spans.is_empty());
         assert_eq!(
@@ -1445,7 +1548,7 @@ mod tests {
 
     #[test]
     fn preview_strips_heading_markers() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("# Hello World".to_string(), 200);
         assert_eq!(result.plain_text, "Hello World");
         assert!(result.spans.is_empty());
@@ -1453,7 +1556,7 @@ mod tests {
 
     #[test]
     fn preview_strips_bold_markers() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("**bold** text".to_string(), 200);
         assert_eq!(result.plain_text, "bold text");
         assert_eq!(result.spans.len(), 1);
@@ -1464,7 +1567,7 @@ mod tests {
 
     #[test]
     fn preview_checkbox_rendering() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("- [x] Done\n- [ ] Todo".to_string(), 200);
         assert!(result.plain_text.starts_with("✓ Done"));
         assert!(result.plain_text.contains("☐ Todo"));
@@ -1472,7 +1575,7 @@ mod tests {
 
     #[test]
     fn preview_multiple_blocks() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("# Title\n\nSome **bold** paragraph".to_string(), 200);
         assert_eq!(result.plain_text, "Title\nSome bold paragraph");
         assert_eq!(result.spans.len(), 1);
@@ -1484,14 +1587,14 @@ mod tests {
 
     #[test]
     fn preview_truncation() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("Hello World, this is a long text".to_string(), 10);
         assert_eq!(result.plain_text.encode_utf16().count(), 10);
     }
 
     #[test]
     fn preview_truncation_clamps_spans() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         // "bold text here" = 14 clean chars, truncate to 8 → "bold tex"
         // Bold span covers [0,4), should survive. No span should exceed max_chars.
         let result = parser.render_preview("**bold** text here".to_string(), 8);
@@ -1508,7 +1611,7 @@ mod tests {
 
     #[test]
     fn preview_empty_text() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview(String::new(), 200);
         assert_eq!(result.plain_text, "");
         assert!(result.spans.is_empty());
@@ -1516,7 +1619,7 @@ mod tests {
 
     #[test]
     fn preview_skips_code_blocks() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview(
             "Hello\n\n```rust\nlet x = 1;\n```\n\nWorld".to_string(),
             200,
@@ -1526,7 +1629,7 @@ mod tests {
 
     #[test]
     fn preview_italic_and_strikethrough() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("*italic* and ~~struck~~".to_string(), 200);
         assert_eq!(result.plain_text, "italic and struck");
         assert_eq!(result.spans.len(), 2);
@@ -1540,14 +1643,14 @@ mod tests {
 
     #[test]
     fn preview_bullet_list() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("- item one\n- item two".to_string(), 200);
         assert_eq!(result.plain_text, "item one\nitem two");
     }
 
     #[test]
     fn preview_inline_code() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("Use `println` here".to_string(), 200);
         assert_eq!(result.plain_text, "Use println here");
         assert_eq!(result.spans.len(), 1);
@@ -1558,7 +1661,7 @@ mod tests {
 
     #[test]
     fn preview_blockquote() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("> Quoted **text**".to_string(), 200);
         assert_eq!(result.plain_text, "Quoted text");
         assert_eq!(result.spans.len(), 1);
@@ -1567,21 +1670,21 @@ mod tests {
 
     #[test]
     fn preview_wiki_link_stripped() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("See [[My Note]] here".to_string(), 200);
         assert_eq!(result.plain_text, "See My Note here");
     }
 
     #[test]
     fn preview_wiki_link_alias_uses_display_text() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("See [[Target|friendly name]] here".to_string(), 200);
         assert_eq!(result.plain_text, "See friendly name here");
     }
 
     #[test]
     fn preview_comment_stripped_entirely() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result =
             parser.render_preview("visible %%hidden drafting note%% more".to_string(), 200);
         // Double space is acceptable — matches Obsidian's comment-stripping behavior.
@@ -1604,7 +1707,7 @@ mod tests {
 
     #[test]
     fn preview_bold_italic_nested() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("***bold italic*** text".to_string(), 200);
         assert_eq!(result.plain_text, "bold italic text");
         assert_eq!(result.spans.len(), 1);
@@ -1615,7 +1718,7 @@ mod tests {
 
     #[test]
     fn preview_mixed_formatting() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         // Inline code has higher priority: backticks are claimed first,
         // which prevents bold ** from matching across the code span.
         // This matches CommonMark behavior.
@@ -1628,7 +1731,7 @@ mod tests {
 
     #[test]
     fn preview_stacked_strikethrough_bold() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.render_preview("~~**bold strike**~~".to_string(), 200);
         assert_eq!(result.plain_text, "bold strike");
         // Should have both strikethrough and bold spans
@@ -1637,7 +1740,7 @@ mod tests {
 
     #[test]
     fn render_previews_single_parse() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let results = parser.render_previews(
             "# Title\n\n**bold** paragraph\n\nMore text here".to_string(),
             10,
@@ -1656,7 +1759,7 @@ mod tests {
 
     #[test]
     fn ffi_table_data() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("| A | B |\n| --- | --- |\n| 1 | 2 |".to_string());
         assert_eq!(result.blocks[0].block_type, FfiBlockType::Table);
         assert_eq!(result.blocks[0].table_headers, vec!["A", "B"]);
@@ -1670,21 +1773,21 @@ mod tests {
 
     #[test]
     fn parse_result_contains_wiki_links() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("See [[My Note]] and [[Other Note]]".to_string());
         assert_eq!(result.wiki_links, vec!["My Note", "Other Note"]);
     }
 
     #[test]
     fn parse_result_wiki_links_deduped() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("See [[Note]] and [[Note]] again".to_string());
         assert_eq!(result.wiki_links, vec!["Note"]);
     }
 
     #[test]
     fn parse_result_wiki_link_alias_uses_target_for_backlinks() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser
             .parse("See [[Project Apollo|the moon shot]] and [[Project Apollo]] again".to_string());
         // Backlinks use the target; the alias is display-only and bare + aliased
@@ -1694,7 +1797,7 @@ mod tests {
 
     #[test]
     fn parse_result_wiki_links_skip_code_blocks() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result =
             parser.parse("See [[Real]]\n\n```\n[[InCode]]\n```\n\n[[Also Real]]".to_string());
         assert_eq!(result.wiki_links, vec!["Real", "Also Real"]);
@@ -1702,7 +1805,7 @@ mod tests {
 
     #[test]
     fn parse_result_contains_headings() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("# Title\n\nParagraph\n\n## Subtitle\n\n### Deep".to_string());
         assert_eq!(result.headings.len(), 3);
         assert_eq!(result.headings[0].level, 1);
@@ -1715,7 +1818,7 @@ mod tests {
 
     #[test]
     fn parse_result_no_headings_or_wiki_links() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("Just a plain paragraph.".to_string());
         assert!(result.wiki_links.is_empty());
         assert!(result.headings.is_empty());
@@ -1725,7 +1828,7 @@ mod tests {
 
     #[test]
     fn parse_for_save_returns_everything() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse_for_save(
             "# Title\n\nSee [[My Note]]\n\n**bold** text".to_string(),
             10,
@@ -1750,7 +1853,7 @@ mod tests {
 
     #[test]
     fn parse_for_save_empty_input() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse_for_save(String::new(), 200, 800);
         assert!(result.blocks.is_empty());
         assert!(result.wiki_links.is_empty());
@@ -1761,7 +1864,7 @@ mod tests {
 
     #[test]
     fn parse_for_save_matches_separate_calls() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let text = "# Hello\n\nSee [[World]]\n\n- [x] Done\n- [ ] Todo".to_string();
         let combined = parser.parse_for_save(text.clone(), 200, 800);
         let separate_parse = parser.parse(text.clone());
@@ -1791,7 +1894,7 @@ mod tests {
 
     #[test]
     fn parse_for_save_wiki_links_in_lists() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result =
             parser.parse_for_save("- See [[Note A]]\n- And [[Note B]]".to_string(), 200, 800);
         assert_eq!(result.wiki_links, vec!["Note A", "Note B"]);
@@ -1799,7 +1902,7 @@ mod tests {
 
     #[test]
     fn parse_for_save_wiki_links_in_tables() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse_for_save(
             "| Header | Link |\n| --- | --- |\n| Cell | See [[Table Note]] |".to_string(),
             200,
@@ -1810,14 +1913,14 @@ mod tests {
 
     #[test]
     fn parse_result_wiki_links_in_tables() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse("| A | B |\n| - | - |\n| [[Note X]] | text |".to_string());
         assert_eq!(result.wiki_links, vec!["Note X"]);
     }
 
     #[test]
     fn wiki_links_in_tables_deduped_with_body() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result = parser.parse_for_save(
             "See [[Shared]]\n\n| A |\n| - |\n| [[Shared]] |\n| [[Table Only]] |".to_string(),
             200,
@@ -1829,7 +1932,7 @@ mod tests {
 
     #[test]
     fn wiki_links_in_blockquotes() {
-        let parser = CindermarkParser::new();
+        let parser = CindermarkParser::new(None);
         let result =
             parser.parse_for_save("> See [[Quoted Note]] for context".to_string(), 200, 800);
         assert_eq!(result.wiki_links, vec!["Quoted Note"]);

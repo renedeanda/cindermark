@@ -557,10 +557,11 @@ open class CindermarkParser:
     public func uniffiClonePointer() -> UnsafeMutableRawPointer {
         return try! rustCall { uniffi_cindermark_fn_clone_cindermarkparser(self.pointer, $0) }
     }
-public convenience init() {
+public convenience init(imageMarkerScheme: String? = nil) {
     let pointer =
         try! rustCall() {
-    uniffi_cindermark_fn_constructor_cindermarkparser_new($0
+    uniffi_cindermark_fn_constructor_cindermarkparser_new(
+        FfiConverterOptionString.lower(imageMarkerScheme),$0
     )
 }
     self.init(unsafeFromRawPointer: pointer)
@@ -2462,7 +2463,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_cindermark_checksum_method_cindermarkparser_toggle_checkbox() != 24460) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_cindermark_checksum_constructor_cindermarkparser_new() != 57810) {
+    if (uniffi_cindermark_checksum_constructor_cindermarkparser_new() != 51368) {
         return InitializationResult.apiChecksumMismatch
     }
 

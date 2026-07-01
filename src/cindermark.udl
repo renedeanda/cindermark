@@ -154,7 +154,7 @@ dictionary FfiRenderedPreview {
 };
 
 interface CindermarkParser {
-    constructor();
+    constructor(optional string? image_marker_scheme = null);
     FfiParseResult parse(string text);
     FfiParseResult parse_editable(string text);
     FfiIncrementalResult parse_editable_incremental(string text, u32 edit_utf16_start, u32 edit_old_utf16_len, u32 edit_new_utf16_len);

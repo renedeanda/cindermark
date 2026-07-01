@@ -41,8 +41,28 @@ struct ParsedListMarker<'a> {
     ordered_number: u32,
 }
 
-/// Parse source text into a `Document` with the given mode.
+/// Options controlling opt-in parser extensions.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParseOptions {
+    /// URI-scheme prefix for block-level image / attachment markers:
+    /// `![](<scheme><UUID>)` on a line by itself. The scheme string is the
+    /// literal text between `![](` and the UUID, including any trailing
+    /// colon — e.g. Ember Notes passes `"ember:"`.
+    ///
+    /// `None` (the default) disables the extension entirely: marker-shaped
+    /// lines fall through to the regular paragraph path, which is the
+    /// CommonMark-clean behavior.
+    pub image_marker_scheme: Option<String>,
+}
+
+/// Parse source text into a `Document` with the given mode and default
+/// options (all extensions that require configuration are off).
 pub fn parse(source: &str, mode: ParseMode) -> Document {
+    parse_with_options(source, mode, &ParseOptions::default())
+}
+
+/// Parse source text into a `Document` with the given mode and options.
+pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions) -> Document {
     let bytes = source.as_bytes();
     let utf16_map = Utf16Map::build(bytes);
     let lines = split_lines(source);
@@ -76,25 +96,25 @@ pub fn parse(source: &str, mode: ParseMode) -> Document {
             continue;
         }
 
-        // Image / sketch marker: `![](ember:<UUID>)` on a line by itself. The
-        // editor injects these as `ImageTextAttachment` (U+FFFC) so the user
-        // sees an inline image, not raw markdown. Must run before paragraph
+        // Image / sketch marker: `![](<scheme><UUID>)` on a line by itself
+        // (opt-in via `ParseOptions::image_marker_scheme`). Host editors
+        // inject these as text attachments (U+FFFC) so the user sees an
+        // inline image, not raw markdown. Must run before paragraph
         // collection — once a marker rolls up into a paragraph block the
-        // injector can't get at it. Lexer already recognises the same
-        // pattern for token output; we mirror the rule here at the block
-        // level so editor surfaces (which consume blocks, not tokens) get
-        // the dedicated `ImageMarker` kind.
-        if let Some(uuid) = parse_image_marker_line(trimmed) {
-            blocks.push(make_block(
-                BlockKind::ImageMarker { uuid },
-                &lines,
-                i,
-                i + 1,
-                bytes,
-                &utf16_map,
-            ));
-            i += 1;
-            continue;
+        // injector can't get at it.
+        if let Some(scheme) = options.image_marker_scheme.as_deref() {
+            if let Some(uuid) = parse_image_marker_line(trimmed, scheme) {
+                blocks.push(make_block(
+                    BlockKind::ImageMarker { uuid },
+                    &lines,
+                    i,
+                    i + 1,
+                    bytes,
+                    &utf16_map,
+                ));
+                i += 1;
+                continue;
+            }
         }
 
         // Indented code block (CommonMark §4.4): 4+ leading spaces (or tab).
@@ -972,7 +992,8 @@ fn parse_checkbox_any_indent(trimmed_line: &str) -> Option<(&str, &str, bool)> {
     Some((&trimmed_line[..end], &trimmed_line[end..], checked))
 }
 
-/// Parses `![](ember:<UUID>)` block markers (image / sketch attachments).
+/// Parses `![](<scheme><UUID>)` block markers (image / sketch attachments),
+/// where `scheme` is the host-configured prefix (e.g. `"ember:"`).
 ///
 /// Returns the UUID string (preserving original case) when `line` is *exactly*
 /// the marker — leading / trailing whitespace is the caller's job to strip
@@ -985,10 +1006,11 @@ fn parse_checkbox_any_indent(trimmed_line: &str) -> Option<(&str, &str, bool)> {
 /// hex sequence (case-insensitive) qualifies. Stricter version-bit checks
 /// would reject UUIDs the app itself produced via `UUID()` (which returns
 /// v4) without round-trip-safe value across SwiftData migrations.
-pub(crate) fn parse_image_marker_line(line: &str) -> Option<String> {
-    const PREFIX: &str = "![](ember:";
-    const SUFFIX: &str = ")";
-    let stripped = line.strip_prefix(PREFIX)?.strip_suffix(SUFFIX)?;
+pub(crate) fn parse_image_marker_line(line: &str, scheme: &str) -> Option<String> {
+    let stripped = line
+        .strip_prefix("![](")?
+        .strip_prefix(scheme)?
+        .strip_suffix(')')?;
     if !is_uuid_format(stripped) {
         return None;
     }
@@ -2089,9 +2111,23 @@ mod tests {
 
     // MARK: - Image marker
 
+    fn ember_options() -> ParseOptions {
+        ParseOptions {
+            image_marker_scheme: Some("ember:".to_string()),
+        }
+    }
+
+    fn parse_editable_ember(input: &str) -> Vec<BlockNode> {
+        parse_with_options(input, ParseMode::Editable, &ember_options()).blocks
+    }
+
+    fn parse_grouped_ember(input: &str) -> Vec<BlockNode> {
+        parse_with_options(input, ParseMode::Grouped, &ember_options()).blocks
+    }
+
     #[test]
     fn image_marker_uppercase_uuid_recognised() {
-        let blocks = parse_editable("![](ember:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)\n");
+        let blocks = parse_editable_ember("![](ember:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)\n");
         assert_eq!(
             blocks.len(),
             1,
@@ -2107,14 +2143,14 @@ mod tests {
 
     #[test]
     fn image_marker_lowercase_uuid_recognised() {
-        let blocks = parse_editable("![](ember:debd1746-cbbb-4a33-9cb0-4b1a5d956200)\n");
+        let blocks = parse_editable_ember("![](ember:debd1746-cbbb-4a33-9cb0-4b1a5d956200)\n");
         assert!(matches!(&blocks[0].kind, BlockKind::ImageMarker { .. }));
     }
 
     #[test]
     fn image_marker_grouped_mode_recognised() {
         // Grouped mode is what preview surfaces consume; same dispatch rule.
-        let blocks = parse_grouped("![](ember:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)");
+        let blocks = parse_grouped_ember("![](ember:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)");
         assert!(matches!(&blocks[0].kind, BlockKind::ImageMarker { .. }));
     }
 
@@ -2123,27 +2159,50 @@ mod tests {
         // Inline form (text on same line) is not a block marker — must
         // remain a Paragraph so editor surfaces don't accidentally tear
         // out a chunk of the user's prose.
-        let blocks =
-            parse_editable("look at this ![](ember:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200) inline\n");
+        let blocks = parse_editable_ember(
+            "look at this ![](ember:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200) inline\n",
+        );
         assert!(matches!(&blocks[0].kind, BlockKind::Paragraph { .. }));
     }
 
     #[test]
     fn image_marker_malformed_uuid_falls_through() {
-        let blocks = parse_editable("![](ember:not-a-uuid)\n");
+        let blocks = parse_editable_ember("![](ember:not-a-uuid)\n");
         assert!(matches!(&blocks[0].kind, BlockKind::Paragraph { .. }));
     }
 
     #[test]
     fn image_marker_wrong_scheme_falls_through() {
-        let blocks = parse_editable("![](other:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)\n");
+        let blocks = parse_editable_ember("![](other:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)\n");
         assert!(matches!(&blocks[0].kind, BlockKind::Paragraph { .. }));
+    }
+
+    #[test]
+    fn image_marker_disabled_without_scheme() {
+        // Default options: the extension is off and marker-shaped lines are
+        // plain paragraphs — CommonMark-clean behavior for new adopters.
+        let blocks = parse_editable("![](ember:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)\n");
+        assert!(matches!(&blocks[0].kind, BlockKind::Paragraph { .. }));
+    }
+
+    #[test]
+    fn image_marker_custom_scheme_recognised() {
+        let options = ParseOptions {
+            image_marker_scheme: Some("cinder:".to_string()),
+        };
+        let blocks = parse_with_options(
+            "![](cinder:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)\n",
+            ParseMode::Editable,
+            &options,
+        )
+        .blocks;
+        assert!(matches!(&blocks[0].kind, BlockKind::ImageMarker { .. }));
     }
 
     #[test]
     fn image_marker_in_document_alongside_other_blocks() {
         let src = "# Title\n\n![](ember:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)\n\nNext paragraph\n";
-        let blocks = parse_editable(src);
+        let blocks = parse_editable_ember(src);
         let kinds: Vec<&BlockKind> = blocks.iter().map(|b| &b.kind).collect();
         assert!(matches!(kinds[0], BlockKind::Heading { .. }));
         // Empty line, then marker, then empty line, then paragraph — exact

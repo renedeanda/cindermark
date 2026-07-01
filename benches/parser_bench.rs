@@ -24,7 +24,7 @@ fn generate_note(lines: usize) -> String {
 
 fn bench_parse_500(c: &mut Criterion) {
     let note = generate_note(500);
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     c.bench_function("parse_500_lines", |b| {
         b.iter(|| parser.parse(black_box(note.clone())))
     });
@@ -32,7 +32,7 @@ fn bench_parse_500(c: &mut Criterion) {
 
 fn bench_parse_2500(c: &mut Criterion) {
     let note = generate_note(2500);
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     c.bench_function("parse_2500_lines", |b| {
         b.iter(|| parser.parse(black_box(note.clone())))
     });
@@ -40,7 +40,7 @@ fn bench_parse_2500(c: &mut Criterion) {
 
 fn bench_parse_editable_500(c: &mut Criterion) {
     let note = generate_note(500);
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     c.bench_function("parse_editable_500_lines", |b| {
         b.iter(|| parser.parse_editable(black_box(note.clone())))
     });
@@ -68,7 +68,7 @@ fn bench_incremental_keystroke(c: &mut Criterion, name: &str, lines: usize, with
     let mut edited = base.clone();
     edited.insert(pos, 'x');
 
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     parser.parse_editable(base.clone());
 
     // The generated note is pure ASCII, so byte offset == UTF-16 offset.

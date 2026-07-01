@@ -45,7 +45,7 @@ pub enum TokenKind {
     HorizontalRule,       // "---" / "***" / "___" (3+ chars, sole content)
     TablePipe,            // "|"
     FootnoteDefMarker,    // "[^label]:" — content is the label
-    ImageMarker,          // "![](ember:...)" — full marker
+    ImageMarker,          // "![](<scheme>...)" — full marker (opt-in extension)
 
     // Inline delimiters
     Asterisks(u8),      // 1-3 consecutive *
@@ -74,15 +74,23 @@ pub enum TokenKind {
 pub struct Lexer<'a> {
     source: &'a [u8],
     pos: usize,
+    /// URI-scheme prefix for `![](<scheme>...)` image markers, or `None`
+    /// when the extension is disabled. See `parser::ParseOptions`.
+    image_marker_scheme: Option<&'a str>,
     /// Tokens produced by the lexer.
     pub tokens: Vec<Token>,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a [u8]) -> Self {
+        Self::with_image_marker_scheme(source, None)
+    }
+
+    pub fn with_image_marker_scheme(source: &'a [u8], scheme: Option<&'a str>) -> Self {
         Self {
             source,
             pos: 0,
+            image_marker_scheme: scheme,
             tokens: Vec::with_capacity(source.len() / 4 + 16),
         }
     }
@@ -366,10 +374,17 @@ impl<'a> Lexer<'a> {
     }
 
     fn try_image_marker(&mut self) -> bool {
+        // Opt-in extension: no scheme configured, no marker tokens.
+        let Some(scheme) = self.image_marker_scheme else {
+            return false;
+        };
+        let scheme = scheme.as_bytes();
         let start = self.pos;
         let remaining = &self.source[self.pos..];
-        // Match "![](ember:" pattern
-        if remaining.len() < 10 {
+        // Match "![](<scheme>" pattern with at least one byte of payload
+        // before the closing paren.
+        let prefix_len = 4 + scheme.len();
+        if remaining.len() <= prefix_len {
             return false;
         }
         if remaining[0] != b'!'
@@ -379,12 +394,11 @@ impl<'a> Lexer<'a> {
         {
             return false;
         }
-        // Check for "ember:" prefix
-        if remaining.len() < 11 || &remaining[4..10] != b"ember:" {
+        if &remaining[4..prefix_len] != scheme {
             return false;
         }
         // Find closing paren
-        let mut p = self.pos + 10;
+        let mut p = self.pos + prefix_len;
         while p < self.source.len() && self.source[p] != b')' && self.source[p] != b'\n' {
             p += 1;
         }
@@ -807,10 +821,30 @@ mod tests {
         assert!(matches!(tokens[0].kind, TokenKind::FootnoteDefMarker));
     }
 
+    fn tokenize_with_scheme(input: &str, scheme: &str) -> Vec<Token> {
+        let mut lexer = Lexer::with_image_marker_scheme(input.as_bytes(), Some(scheme));
+        lexer.tokenize();
+        lexer.tokens
+    }
+
     #[test]
     fn image_marker() {
-        let tokens = tokenize("![](ember:abc-123)\n");
+        let tokens = tokenize_with_scheme("![](ember:abc-123)\n", "ember:");
         assert!(matches!(tokens[0].kind, TokenKind::ImageMarker));
+    }
+
+    #[test]
+    fn image_marker_custom_scheme() {
+        let tokens = tokenize_with_scheme("![](cinder:abc-123)\n", "cinder:");
+        assert!(matches!(tokens[0].kind, TokenKind::ImageMarker));
+    }
+
+    #[test]
+    fn image_marker_disabled_by_default() {
+        let tokens = tokenize("![](ember:abc-123)\n");
+        assert!(!tokens
+            .iter()
+            .any(|t| matches!(t.kind, TokenKind::ImageMarker)));
     }
 
     #[test]

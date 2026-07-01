@@ -71,6 +71,9 @@ impl ParseSnapshot {
 /// - `edit_utf16_start`: UTF-16 offset where the edit began
 /// - `edit_old_utf16_len`: Number of UTF-16 code units replaced (from old text)
 /// - `edit_new_utf16_len`: Number of UTF-16 code units inserted (in new text)
+/// - `options`: Parse options — must match the options used for the parse
+///   that produced `prev`, or incremental results will diverge from a full
+///   parse.
 ///
 /// # Returns
 /// An `IncrementalResult` with the updated blocks and dirty range.
@@ -80,10 +83,11 @@ pub fn incremental_update(
     edit_utf16_start: u32,
     edit_old_utf16_len: u32,
     edit_new_utf16_len: u32,
+    options: &parser::ParseOptions,
 ) -> IncrementalResult {
     // Empty previous state → full parse
     if prev.blocks.is_empty() {
-        return full_parse_result(new_source);
+        return full_parse_result(new_source, options);
     }
 
     let edit_utf16_end_old = edit_utf16_start.saturating_add(edit_old_utf16_len);
@@ -115,7 +119,7 @@ pub fn incremental_update(
         edit_utf16_start,
         edit_new_utf16_len,
     ) {
-        return full_parse_result(new_source);
+        return full_parse_result(new_source, options);
     }
 
     // 4. Determine the byte range to re-parse in the new source.
@@ -129,12 +133,12 @@ pub fn incremental_update(
 
     // Sanity check: if the reparse region is empty or invalid, fall back.
     if reparse_byte_start >= reparse_byte_end || reparse_byte_start > new_source.len() {
-        return full_parse_result(new_source);
+        return full_parse_result(new_source, options);
     }
 
     // 5. Parse the dirty region as a standalone substring.
     let dirty_text = &new_source[reparse_byte_start..reparse_byte_end];
-    let dirty_doc = parser::parse(dirty_text, ParseMode::Editable);
+    let dirty_doc = parser::parse_with_options(dirty_text, ParseMode::Editable, options);
 
     // 6. Compute base offsets for shifting dirty blocks to absolute positions.
     let base_utf16 = new_utf16_map.byte_to_utf16(reparse_byte_start as u32, new_source.as_bytes());
@@ -182,14 +186,14 @@ pub fn incremental_update(
             suffix_line_delta,
         ) {
             // Offset underflow detected — fall back to full re-parse.
-            return full_parse_result(new_source);
+            return full_parse_result(new_source, options);
         }
         result_blocks.push(b);
     }
 
     let new_line_count = match safe_add_delta(prev.line_count, suffix_line_delta) {
         Some(lc) => lc,
-        None => return full_parse_result(new_source),
+        None => return full_parse_result(new_source, options),
     };
 
     IncrementalResult {
@@ -285,8 +289,8 @@ fn needs_full_reparse(
 // MARK: - Full parse fallback
 
 /// Fall back to a full re-parse, marking all blocks as dirty.
-fn full_parse_result(source: &str) -> IncrementalResult {
-    let doc = parser::parse(source, ParseMode::Editable);
+fn full_parse_result(source: &str, options: &parser::ParseOptions) -> IncrementalResult {
+    let doc = parser::parse_with_options(source, ParseMode::Editable, options);
     let block_count = doc.blocks.len() as u32;
     let utf16_map = Utf16Map::build(source.as_bytes());
     IncrementalResult {
@@ -566,7 +570,7 @@ mod tests {
         // Insert "X" at the start of "Hello world" → "XHello world"
         let new = "# Title\n\nXHello world\n\n---";
         // Edit at UTF-16 offset 9 (after "# Title\n\n"), old len 0, new len 1
-        let result = incremental_update(&snap, new, 9, 0, 1);
+        let result = incremental_update(&snap, new, 9, 0, 1, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
         // Should NOT re-parse the entire document — dirty range should be small.
         assert!(
@@ -583,7 +587,7 @@ mod tests {
         let snap = snapshot(old);
         let new = "# Titles\n\nSome text";
         // Insert "s" at offset 7 (after "Title")
-        let result = incremental_update(&snap, new, 7, 0, 1);
+        let result = incremental_update(&snap, new, 7, 0, 1, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -593,7 +597,7 @@ mod tests {
         let snap = snapshot(old);
         // Delete "Hello" (5 chars at offset 9)
         let new = "# Title\n\n world\n\n---";
-        let result = incremental_update(&snap, new, 9, 5, 0);
+        let result = incremental_update(&snap, new, 9, 5, 0, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -603,7 +607,7 @@ mod tests {
         let snap = snapshot(old);
         // Replace "Hello" (5 chars at offset 9) with "Goodbye" (7 chars)
         let new = "# Title\n\nGoodbye\n\nWorld";
-        let result = incremental_update(&snap, new, 9, 5, 7);
+        let result = incremental_update(&snap, new, 9, 5, 7, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -613,7 +617,7 @@ mod tests {
         let snap = snapshot(old);
         // Insert newline in "Hello world" → "Hello\nworld"
         let new = "# Title\n\nHello\nworld";
-        let result = incremental_update(&snap, new, 14, 1, 1);
+        let result = incremental_update(&snap, new, 14, 1, 1, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -623,7 +627,7 @@ mod tests {
         let snap = snapshot(old);
         // Append " more" at end
         let new = "# Title\n\nText more";
-        let result = incremental_update(&snap, new, 13, 0, 5);
+        let result = incremental_update(&snap, new, 13, 0, 5, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -633,7 +637,7 @@ mod tests {
         let snap = snapshot(old);
         // Insert "# " at start → makes it a heading
         let new = "# Hello\n\nWorld";
-        let result = incremental_update(&snap, new, 0, 0, 2);
+        let result = incremental_update(&snap, new, 0, 0, 2, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -643,7 +647,7 @@ mod tests {
         let snap = snapshot(old);
         // Append " done" to first task
         let new = "- [ ] Task one done\n- [x] Task two";
-        let result = incremental_update(&snap, new, 14, 0, 5);
+        let result = incremental_update(&snap, new, 14, 0, 5, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -653,7 +657,7 @@ mod tests {
         let snap = snapshot(old);
         // Edit "item 2" → "item TWO"
         let new = "- item 1\n- item TWO\n- item 3";
-        let result = incremental_update(&snap, new, 11, 6, 8);
+        let result = incremental_update(&snap, new, 11, 6, 8, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -663,7 +667,7 @@ mod tests {
         let snap = snapshot(old);
         // Type "```" on the "Some text" line → code fence
         let new = "# Title\n\n```\nSome text\n\nMore text";
-        let result = incremental_update(&snap, new, 9, 0, 4);
+        let result = incremental_update(&snap, new, 9, 0, 4, &parser::ParseOptions::default());
         // Should fall back to full re-parse
         assert_eq!(result.dirty_start, 0);
         assert_matches_full_parse(&result, new);
@@ -675,7 +679,7 @@ mod tests {
         let snap = snapshot(old);
         // Edit inside code block
         let new = "# Title\n\n```\ncode here\n```\n\nText";
-        let result = incremental_update(&snap, new, 13, 4, 9);
+        let result = incremental_update(&snap, new, 13, 4, 9, &parser::ParseOptions::default());
         // Code block → full reparse
         assert_eq!(result.dirty_start, 0);
         assert_matches_full_parse(&result, new);
@@ -686,7 +690,7 @@ mod tests {
         let old = "";
         let snap = snapshot(old);
         let new = "Hello";
-        let result = incremental_update(&snap, new, 0, 0, 5);
+        let result = incremental_update(&snap, new, 0, 0, 5, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -695,7 +699,7 @@ mod tests {
         let old = "Hello";
         let snap = snapshot(old);
         let new = "Hello world";
-        let result = incremental_update(&snap, new, 5, 0, 6);
+        let result = incremental_update(&snap, new, 5, 0, 6, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -705,7 +709,7 @@ mod tests {
         let snap = snapshot(old);
         // Delete "Middle\n" line
         let new = "# Title\n\n\nEnd";
-        let result = incremental_update(&snap, new, 9, 7, 0);
+        let result = incremental_update(&snap, new, 9, 7, 0, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -715,7 +719,7 @@ mod tests {
         let snap = snapshot(old);
         // Insert "Middle\n\n" between heading and End
         let new = "# Title\n\nMiddle\n\nEnd";
-        let result = incremental_update(&snap, new, 9, 0, 8);
+        let result = incremental_update(&snap, new, 9, 0, 8, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -725,7 +729,7 @@ mod tests {
         let snap = snapshot(old);
         // Change "world" → "earth" inside bold
         let new = "Hello **earth**";
-        let result = incremental_update(&snap, new, 8, 5, 5);
+        let result = incremental_update(&snap, new, 8, 5, 5, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -735,7 +739,7 @@ mod tests {
         let snap = snapshot(old);
         // Edit "Two" → "TWO"
         let new = "# One\n\n## TWO\n\n### Three\n\nParagraph";
-        let result = incremental_update(&snap, new, 10, 3, 3);
+        let result = incremental_update(&snap, new, 10, 3, 3, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
         // Should not dirty the entire document
         assert!(result.dirty_end - result.dirty_start <= 4);
@@ -747,7 +751,7 @@ mod tests {
         let snap = snapshot(old);
         // Change --- to --
         let new = "Before\n\n--\n\nAfter";
-        let result = incremental_update(&snap, new, 10, 1, 0);
+        let result = incremental_update(&snap, new, 10, 1, 0, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -758,7 +762,7 @@ mod tests {
         // Insert after emoji (🌍 is 4 bytes / 2 UTF-16 units)
         // "Hello 🌍" = H(1) e(1) l(1) l(1) o(1) ' '(1) 🌍(2) = 8 UTF-16 units
         let new = "Hello 🌍!\n\nWorld";
-        let result = incremental_update(&snap, new, 8, 0, 1);
+        let result = incremental_update(&snap, new, 8, 0, 1, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -767,7 +771,7 @@ mod tests {
         let old = "# Title\n\n> Quote text\n\nEnd";
         let snap = snapshot(old);
         let new = "# Title\n\n> Quote text more\n\nEnd";
-        let result = incremental_update(&snap, new, 20, 0, 5);
+        let result = incremental_update(&snap, new, 20, 0, 5, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -779,7 +783,7 @@ mod tests {
         // Edit "Para" → "ParaX"
         let new = "# H1\n\n## H2\n\n### H3\n\nParaX\n\n- B1\n\n- B2\n\n> Quote\n\n---\n\nEnd";
         // "ParaX" starts at UTF-16 offset 21 in the text
-        let result = incremental_update(&snap, new, 25, 0, 1);
+        let result = incremental_update(&snap, new, 25, 0, 1, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
         // Dirty range should be small (not the full document).
         let dirty_count = result.dirty_end - result.dirty_start;
@@ -854,7 +858,7 @@ mod tests {
         let snap = snapshot(old);
         // Edit inside table cell: "1" → "X"
         let new = "# Title\n\n| A | B |\n| --- | --- |\n| X | 2 |\n\nEnd";
-        let result = incremental_update(&snap, new, 34, 1, 1);
+        let result = incremental_update(&snap, new, 34, 1, 1, &parser::ParseOptions::default());
         // Table block → full reparse
         assert_eq!(result.dirty_start, 0);
         assert_matches_full_parse(&result, new);
@@ -866,7 +870,7 @@ mod tests {
         let snap = snapshot(old);
         // Edit "second" → "SECOND"
         let new = "1. first\n2. SECOND\n3. third";
-        let result = incremental_update(&snap, new, 12, 6, 6);
+        let result = incremental_update(&snap, new, 12, 6, 6, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -877,7 +881,7 @@ mod tests {
         // Delete everything between H1 and End: "## H2\n\n### H3\n\nParagraph\n\n"
         let new = "# H1\n\nEnd";
         // Edit at UTF-16 offset 6 (after "# H1\n\n"), old len 26, new len 0
-        let result = incremental_update(&snap, new, 6, 26, 0);
+        let result = incremental_update(&snap, new, 6, 26, 0, &parser::ParseOptions::default());
         assert_matches_full_parse(&result, new);
     }
 
@@ -889,7 +893,7 @@ mod tests {
 
         // Type 'a' at end
         let new1 = "# Title\n\nHelloa";
-        let r1 = incremental_update(&snap, new1, 14, 0, 1);
+        let r1 = incremental_update(&snap, new1, 14, 0, 1, &parser::ParseOptions::default());
         assert_matches_full_parse(&r1, new1);
 
         // Build snapshot from r1 for next edit
@@ -903,7 +907,7 @@ mod tests {
 
         // Type 'b' at end
         let new2 = "# Title\n\nHelloab";
-        let r2 = incremental_update(&snap1, new2, 15, 0, 1);
+        let r2 = incremental_update(&snap1, new2, 15, 0, 1, &parser::ParseOptions::default());
         assert_matches_full_parse(&r2, new2);
 
         // Build snapshot from r2
@@ -917,7 +921,7 @@ mod tests {
 
         // Type 'c' at end
         let new3 = "# Title\n\nHelloabc";
-        let r3 = incremental_update(&snap2, new3, 16, 0, 1);
+        let r3 = incremental_update(&snap2, new3, 16, 0, 1, &parser::ParseOptions::default());
         assert_matches_full_parse(&r3, new3);
     }
 

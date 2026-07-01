@@ -36,6 +36,9 @@ Everything is covered by **420+ tests**, including checks that every incremental
 import Cindermark
 
 let parser = CindermarkParser()
+// Or opt in to the attachment-marker extension with your own URI scheme,
+// so `![](myapp:<UUID>)` lines parse as ImageMarker blocks:
+// let parser = CindermarkParser(imageMarkerScheme: "myapp:")
 let result = parser.parseEditable(text: markdown)
 
 for block in result.blocks {

@@ -7,12 +7,12 @@ use cindermark::CindermarkParser;
 
 // Helper: parse in grouped mode via the FFI layer
 fn parse_ffi(input: &str) -> cindermark::FfiParseResult {
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     parser.parse(input.to_string())
 }
 
 fn parse_ffi_editable(input: &str) -> cindermark::FfiParseResult {
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     parser.parse_editable(input.to_string())
 }
 
@@ -489,7 +489,7 @@ fn ordered_start_zero_and_leading_zeroes_are_preserved() {
     assert_eq!(lists[0].number, 0);
     assert_eq!(lists[0].marker_source, "0. ");
 
-    let editable = cindermark::CindermarkParser::new().parse_editable("003. Three".to_string());
+    let editable = cindermark::CindermarkParser::new(None).parse_editable("003. Three".to_string());
     assert_eq!(
         editable.blocks[0].block_type,
         cindermark::FfiBlockType::NumberedItem
@@ -557,7 +557,7 @@ fn checkbox_extension_accepts_all_bullet_sources() {
 
 #[test]
 fn editable_list_metadata_preserves_indentation_and_marker_range() {
-    let parser = cindermark::CindermarkParser::new();
+    let parser = cindermark::CindermarkParser::new(None);
     let result = parser.parse_editable("  + item\n003) value".to_string());
     assert_eq!(
         result.blocks[0].block_type,
@@ -739,28 +739,28 @@ fn collapse_empty_lines() {
 
 #[test]
 fn toggle_unchecked() {
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     let result = parser.toggle_checkbox("- [ ] Task one\n- [ ] Task two".to_string(), 0);
     assert!(result.starts_with("- [x] Task one"));
 }
 
 #[test]
 fn toggle_checked() {
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     let result = parser.toggle_checkbox("- [x] Task one\n- [ ] Task two".to_string(), 0);
     assert!(result.starts_with("- [ ] Task one"));
 }
 
 #[test]
 fn toggle_preserves_indent() {
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     let result = parser.toggle_checkbox("    - [ ] Indented task".to_string(), 0);
     assert_eq!(result, "    - [x] Indented task");
 }
 
 #[test]
 fn toggle_out_of_bounds() {
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     let input = "- [ ] Only line".to_string();
     let result = parser.toggle_checkbox(input.clone(), 99);
     assert_eq!(result, input);
@@ -768,7 +768,7 @@ fn toggle_out_of_bounds() {
 
 #[test]
 fn toggle_non_checkbox() {
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     let input = "Regular text".to_string();
     let result = parser.toggle_checkbox(input.clone(), 0);
     assert_eq!(result, input);
@@ -894,21 +894,21 @@ fn footnote_definition() {
 
 #[test]
 fn extract_wiki_links() {
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     let links = parser.extract_wiki_links("see [[Note One]] and [[Note Two]]".to_string());
     assert_eq!(links, vec!["Note One", "Note Two"]);
 }
 
 #[test]
 fn wiki_links_skip_code() {
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     let links = parser.extract_wiki_links("text `[[not a link]]` and [[real link]]".to_string());
     assert_eq!(links, vec!["real link"]);
 }
 
 #[test]
 fn wiki_links_skip_code_block() {
-    let parser = CindermarkParser::new();
+    let parser = CindermarkParser::new(None);
     let links = parser.extract_wiki_links("text\n```\n[[not a link]]\n```\n[[real]]".to_string());
     assert_eq!(links, vec!["real"]);
 }
@@ -1102,7 +1102,7 @@ fn tilde_underline_not_confused_by_adjacent_double_tilde() {
 
 #[test]
 fn incremental_parse_basic() {
-    let parser = cindermark::CindermarkParser::new();
+    let parser = cindermark::CindermarkParser::new(None);
 
     // Initial full parse establishes snapshot.
     let initial = parser.parse_editable("# Title\n\nHello world".to_string());
@@ -1125,7 +1125,7 @@ fn incremental_parse_basic() {
 
 #[test]
 fn incremental_parse_chained_edits() {
-    let parser = cindermark::CindermarkParser::new();
+    let parser = cindermark::CindermarkParser::new(None);
 
     // Initial parse.
     parser.parse_editable("Hello".to_string());
@@ -1144,7 +1144,7 @@ fn incremental_parse_chained_edits() {
 
 #[test]
 fn incremental_parse_code_fence_fallback() {
-    let parser = cindermark::CindermarkParser::new();
+    let parser = cindermark::CindermarkParser::new(None);
 
     // Initial parse.
     parser.parse_editable("# Title\n\nSome text".to_string());
@@ -1159,7 +1159,7 @@ fn incremental_parse_code_fence_fallback() {
 
 #[test]
 fn incremental_parse_reset_state() {
-    let parser = cindermark::CindermarkParser::new();
+    let parser = cindermark::CindermarkParser::new(None);
 
     // Initial parse.
     parser.parse_editable("Hello".to_string());
@@ -1175,7 +1175,7 @@ fn incremental_parse_reset_state() {
 
 #[test]
 fn incremental_dirty_range_reported_correctly() {
-    let parser = cindermark::CindermarkParser::new();
+    let parser = cindermark::CindermarkParser::new(None);
 
     // Document with many blocks.
     parser.parse_editable("# H1\n\n## H2\n\n### H3\n\nPara\n\n---".to_string());
@@ -1205,7 +1205,7 @@ fn incremental_dirty_range_reported_correctly() {
 
 #[test]
 fn incremental_style_only_matches_full_variant() {
-    let parser = cindermark::CindermarkParser::new();
+    let parser = cindermark::CindermarkParser::new(None);
 
     // Initial full parse to establish snapshot.
     parser.parse_editable("# Title\n\nHello world\n\n- item".to_string());
@@ -1243,7 +1243,7 @@ fn incremental_style_only_matches_full_variant() {
 
 #[test]
 fn incremental_style_only_no_snapshot_fallback() {
-    let parser = cindermark::CindermarkParser::new();
+    let parser = cindermark::CindermarkParser::new(None);
 
     // Call style-only without prior snapshot — should fall back to full parse.
     let result = parser.parse_editable_incremental_style_only("Hello World".to_string(), 0, 0, 11);
