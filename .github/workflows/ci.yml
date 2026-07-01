@@ -1,0 +1,52 @@
+name: CI
+
+# Linux-only by design: the core crate is platform-independent, and Linux
+# runners are free for public repos. Apple artifacts are built by the
+# manual-dispatch release workflow instead (macOS runners cost money).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: rustfmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: tests
+        run: cargo test
+
+      - name: benches compile
+        run: cargo bench --no-run
+
+      - name: Swift bindings drift check
+        run: |
+          cargo run --bin uniffi-bindgen generate src/cindermark.udl \
+            --language swift --out-dir /tmp/bindings-check
+          diff -u swift/Sources/Cindermark/CindermarkFFI.swift /tmp/bindings-check/CindermarkFFI.swift \
+            || { echo "::error::Committed Swift bindings are stale. Regenerate with uniffi-bindgen (see CONTRIBUTING.md)."; exit 1; }

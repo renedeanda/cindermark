@@ -1,0 +1,99 @@
+name: Release (Apple XCFramework)
+
+# MANUAL DISPATCH ONLY. This workflow runs on a macOS runner, which costs
+# money (~$0.16/min). It is never triggered automatically — a maintainer
+# dispatches it to cut a release:
+#
+#   1. Builds libcindermark.a for all 5 Apple targets.
+#   2. Assembles CindermarkFFI.xcframework (device / sim-universal /
+#      macos-universal slices + generated FFI header/modulemap).
+#   3. Patches Package.swift with the release URL + computed checksum.
+#   4. Commits, tags vX.Y.Z, and creates the GitHub release with the
+#      zipped XCFramework attached — so the tag SwiftPM resolves always
+#      has a valid binary target.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.1.0 — no leading v)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust with Apple targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios,aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build all Apple slices
+        run: |
+          for target in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --target "$target"
+          done
+
+      - name: Generate Swift bindings
+        run: |
+          cargo run --bin uniffi-bindgen generate src/cindermark.udl \
+            --language swift --out-dir out/bindings
+          mkdir -p out/headers
+          cp out/bindings/CindermarkFFIFFI.h out/headers/
+          cat > out/headers/module.modulemap <<'EOF'
+          module CindermarkFFIFFI {
+              header "CindermarkFFIFFI.h"
+              export *
+          }
+          EOF
+          # Keep the committed SPM source target in sync
+          cp out/bindings/CindermarkFFI.swift swift/Sources/Cindermark/CindermarkFFI.swift
+
+      - name: Lipo universal slices
+        run: |
+          mkdir -p out/sim out/macos
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/libcindermark.a \
+            target/x86_64-apple-ios/release/libcindermark.a \
+            -output out/sim/libcindermark.a
+          lipo -create \
+            target/aarch64-apple-darwin/release/libcindermark.a \
+            target/x86_64-apple-darwin/release/libcindermark.a \
+            -output out/macos/libcindermark.a
+
+      - name: Create XCFramework
+        run: |
+          xcodebuild -create-xcframework \
+            -library target/aarch64-apple-ios/release/libcindermark.a -headers out/headers \
+            -library out/sim/libcindermark.a -headers out/headers \
+            -library out/macos/libcindermark.a -headers out/headers \
+            -output out/CindermarkFFI.xcframework
+          cd out && zip -r CindermarkFFI.xcframework.zip CindermarkFFI.xcframework
+
+      - name: Patch Package.swift with URL + checksum
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          CHECKSUM=$(swift package compute-checksum out/CindermarkFFI.xcframework.zip)
+          sed -i '' -E "s|url: \"https://github.com/renedeanda/cindermark/releases/download/v[^\"]+\"|url: \"https://github.com/renedeanda/cindermark/releases/download/v${VERSION}/CindermarkFFI.xcframework.zip\"|" Package.swift
+          sed -i '' -E "s|checksum: \"[a-f0-9]+\"|checksum: \"${CHECKSUM}\"|" Package.swift
+
+      - name: Commit, tag, release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Package.swift swift/Sources/Cindermark/CindermarkFFI.swift
+          git commit -m "Release v${VERSION}: patch Package.swift binary target" || echo "Nothing to commit"
+          git tag "v${VERSION}"
+          git push origin HEAD "v${VERSION}"
+          gh release create "v${VERSION}" out/CindermarkFFI.xcframework.zip \
+            --title "v${VERSION}" \
+            --notes "Cindermark v${VERSION}. See CHANGELOG.md."
