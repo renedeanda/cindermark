@@ -1685,7 +1685,8 @@ mod tests {
         let parser = CindermarkParser::new(None);
         let result =
             parser.render_preview("visible %%hidden drafting note%% more".to_string(), 200);
-        // Double space is acceptable — matches Obsidian's comment-stripping behavior.
+        // Double space is acceptable — the surrounding whitespace is left as-is
+        // when a hidden comment is stripped.
         assert!(
             result.plain_text.starts_with("visible") && result.plain_text.ends_with("more"),
             "Comment body must not appear in preview, got {:?}",

@@ -16,7 +16,7 @@ interface FfiBlockType {
     ImageMarker();
     BulletItem();
     NumberedItem();
-    // Obsidian-style callout. `kind` is 0=note, 1=tip, 2=warning, 3=important,
+    // Callout (`[!<kind>]` blockquote). `kind` is 0=note, 1=tip, 2=warning, 3=important,
     // 4=caution. Custom title (if any) is passed via the block's `language` field.
     Callout(u8 kind);
     // Mermaid diagram fenced block. `diagram_type` is a u8 mapping to the

@@ -266,7 +266,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             continue;
         }
 
-        // Blockquote (with Obsidian callout detection on first line)
+        // Blockquote (with callout detection on first line)
         if trimmed.starts_with("> ") || trimmed == ">" {
             let start_line = i;
             let mut quote_lines: Vec<&str> = Vec::new();
@@ -766,7 +766,7 @@ fn strip_indented_code_indent(line: &str) -> &str {
     }
 }
 
-/// Detect an Obsidian callout header `[!<kind>]` with optional trailing title.
+/// Detect a callout header `[!<kind>]` with optional trailing title.
 /// Returns the kind and (if present) the trimmed custom title.
 ///
 /// Format (all parts after `>` stripping done by caller):
@@ -787,7 +787,7 @@ pub(crate) fn parse_callout_header(
     let kind_name = &after_open[..close_idx];
     let kind = crate::ast::CalloutKind::from_name(kind_name)?;
     let mut rest = &after_open[close_idx + 1..];
-    // Strip optional Obsidian fold marker (+ open-by-default, - closed-by-default)
+    // Strip optional fold marker (+ open-by-default, - closed-by-default)
     if rest.starts_with('+') || rest.starts_with('-') {
         rest = &rest[1..];
     }
@@ -1917,7 +1917,7 @@ mod tests {
         );
     }
 
-    // MARK: - Callouts (Obsidian-style)
+    // MARK: - Callouts
 
     #[test]
     fn callout_note_no_title_no_body() {
@@ -1946,12 +1946,12 @@ mod tests {
 
     #[test]
     fn callout_warning_with_body() {
-        let blocks = parse_grouped("> [!warning]\n> Watch out\n> for bears");
+        let blocks = parse_grouped("> [!warning]\n> Watch out\n> for storms");
         assert_eq!(blocks.len(), 1);
         if let BlockKind::Callout { kind, title, text } = &blocks[0].kind {
             assert_eq!(*kind, CalloutKind::Warning);
             assert!(title.is_none());
-            assert_eq!(text, "Watch out\nfor bears");
+            assert_eq!(text, "Watch out\nfor storms");
         } else {
             panic!("Expected Callout");
         }

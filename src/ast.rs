@@ -112,7 +112,7 @@ pub enum BlockKind {
     ImageMarker {
         uuid: String,
     },
-    /// Obsidian-style callout: a blockquote whose first line is `[!<kind>]`
+    /// Callout: a blockquote whose first line is `[!<kind>]`
     /// followed by an optional custom title. Body text comes from subsequent
     /// `> ...` continuation lines.
     Callout {
@@ -248,7 +248,7 @@ pub fn is_mermaid_info_string(info: &str) -> bool {
     info.eq_ignore_ascii_case("mermaid")
 }
 
-/// Obsidian-style callout kind. The five most common variants; additional
+/// Callout kind (`[!note]`, `[!tip]`, …). The five most common variants; additional
 /// aliases can be added post-launch without an ABI break (just map more
 /// strings to the same enum values).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

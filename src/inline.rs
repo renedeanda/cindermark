@@ -121,7 +121,7 @@ pub(crate) fn parse_spans(
         &mut claimed,
     );
 
-    // 1a. Hidden comments `%%text%%` (Obsidian-style drafting notes).
+    // 1a. Hidden comments `%%text%%` (drafting notes that never render).
     //    Runs before wiki/markdown links so a comment containing `[[...]]` or
     //    `[label](url)` is claimed as a single Comment span. Still respects
     //    inline code: `` `%%literal%%` `` stays as code.
