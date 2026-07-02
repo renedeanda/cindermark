@@ -1359,7 +1359,11 @@ impl Default for CindermarkParser {
 }
 
 // UniFFI scaffolding
+#[cfg(feature = "ffi")]
 uniffi::include_scaffolding!("cindermark");
+
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 #[cfg(test)]
 mod tests {

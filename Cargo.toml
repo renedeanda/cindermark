@@ -15,8 +15,16 @@ categories = ["parser-implementations", "text-processing"]
 crate-type = ["staticlib", "cdylib", "lib"]
 name = "cindermark"
 
+[features]
+default = ["ffi"]
+# UniFFI scaffolding + the uniffi-bindgen CLI (Apple/Swift consumers).
+ffi = ["dep:uniffi"]
+# wasm-bindgen surface for browser demos (mutually independent of `ffi`).
+wasm = ["dep:wasm-bindgen"]
+
 [dependencies]
-uniffi = { version = "0.28", features = ["cli"] }
+uniffi = { version = "0.28", features = ["cli"], optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
 memchr = "2"
 rustc-hash = "2"
 unicode-segmentation = "1"
@@ -71,3 +79,9 @@ harness = false
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
+required-features = ["ffi"]
+
+# wasm-pack's bundled wasm-opt crashes on this crate's output; rustc's own
+# release profile (fat LTO, codegen-units=1) already does the heavy lifting.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

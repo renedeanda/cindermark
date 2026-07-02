@@ -252,6 +252,7 @@ dependencies = [
  "rustc-hash",
  "unicode-segmentation",
  "uniffi",
+ "wasm-bindgen",
 ]
 
 [[package]]
