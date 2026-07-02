@@ -176,6 +176,10 @@ fn push_spans(out: &mut String, spans: &[FfiInlineSpan]) {
                 out.push_str(",\"hex\":");
                 push_json_string(out, hex);
             }
+            FfiInlineType::HighlightColor { color_index } => {
+                out.push_str(",\"colorIndex\":");
+                push_u32(out, u32::from(*color_index));
+            }
             _ => {}
         }
         out.push_str(",\"start\":");
