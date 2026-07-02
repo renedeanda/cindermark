@@ -91,6 +91,13 @@ impl WasmParser {
     pub fn reset_state(&self) {
         self.inner.reset_state();
     }
+
+    /// Toggle the checkbox on `line_index`, returning the updated document.
+    /// Same behavior the native editors use for tap-to-toggle.
+    #[wasm_bindgen(js_name = toggleCheckbox)]
+    pub fn toggle_checkbox(&self, text: String, line_index: u32) -> String {
+        self.inner.toggle_checkbox(text, line_index)
+    }
 }
 
 impl Default for WasmParser {

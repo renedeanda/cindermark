@@ -313,6 +313,17 @@ fn shift_block(block: &mut BlockNode, byte_base: u32, utf16_base: u32, line_base
     block.line_start += line_base;
     block.line_end += line_base;
 
+    // List marker metadata carries absolute offsets too — hosts consume the
+    // marker UTF-16 range for marker styling/injection, so it must track the
+    // block. (Indent, marker_source, etc. are position-independent.)
+    if let Some(marker) = &mut block.list_marker {
+        marker.marker_utf16_start += utf16_base;
+        marker.marker_utf16_end += utf16_base;
+        marker.marker_byte_start += byte_base;
+        marker.marker_byte_end += byte_base;
+        marker.content_byte_start += byte_base;
+    }
+
     for span in &mut block.inline_spans {
         span.utf16_start += utf16_base;
         span.utf16_end += utf16_base;
@@ -377,6 +388,30 @@ fn shift_suffix_block(
     block.utf16_end = ue;
     block.line_start = ls;
     block.line_end = le;
+
+    // Shift list marker metadata alongside the block (see `shift_block`).
+    if let Some(marker) = &mut block.list_marker {
+        let Some(mus) = safe_add_delta(marker.marker_utf16_start, utf16_delta) else {
+            return false;
+        };
+        let Some(mue) = safe_add_delta(marker.marker_utf16_end, utf16_delta) else {
+            return false;
+        };
+        let Some(mbs) = safe_add_delta(marker.marker_byte_start, byte_delta) else {
+            return false;
+        };
+        let Some(mbe) = safe_add_delta(marker.marker_byte_end, byte_delta) else {
+            return false;
+        };
+        let Some(mcs) = safe_add_delta(marker.content_byte_start, byte_delta) else {
+            return false;
+        };
+        marker.marker_utf16_start = mus;
+        marker.marker_utf16_end = mue;
+        marker.marker_byte_start = mbs;
+        marker.marker_byte_end = mbe;
+        marker.content_byte_start = mcs;
+    }
 
     for span in &mut block.inline_spans {
         let Some(ss) = safe_add_delta(span.utf16_start, utf16_delta) else {
@@ -536,6 +571,11 @@ mod tests {
                 inc.line_end, ful.line_end,
                 "Block {} line_end: inc={}, full={}",
                 i, inc.line_end, ful.line_end
+            );
+            assert_eq!(
+                inc.list_marker, ful.list_marker,
+                "Block {} list_marker mismatch:\n  incremental: {:?}\n  full: {:?}",
+                i, inc.list_marker, ful.list_marker
             );
             assert_eq!(
                 inc.inline_spans.len(),
@@ -850,6 +890,85 @@ mod tests {
             f <= 1 && l >= 2,
             "Boundary insertion should include adjacent block: {f}..{l}"
         );
+    }
+
+    // MARK: - Nested lists
+
+    #[test]
+    fn edit_inside_nested_list_item() {
+        let old = "- a\n    - b\n        - c\n- d";
+        let snap = snapshot(old);
+        // Edit nested "b" → "bXY" (offset: "- a\n    - b" → 'b' at UTF-16 10)
+        let new = "- a\n    - bXY\n        - c\n- d";
+        let result = incremental_update(&snap, new, 11, 0, 2, &parser::ParseOptions::default());
+        assert_matches_full_parse(&result, new);
+        assert!(
+            result.dirty_end - result.dirty_start <= 3,
+            "Dirty range too large: {}..{}",
+            result.dirty_start,
+            result.dirty_end
+        );
+    }
+
+    #[test]
+    fn insert_nested_item_between_items() {
+        let old = "- a\n- b";
+        let snap = snapshot(old);
+        // Insert "    - a1\n" after "- a\n" (offset 4).
+        let new = "- a\n    - a1\n- b";
+        let result = incremental_update(&snap, new, 4, 0, 9, &parser::ParseOptions::default());
+        assert_matches_full_parse(&result, new);
+    }
+
+    #[test]
+    fn indent_change_reclassifies_line() {
+        // Adding 4 leading spaces turns a top-level item into a nested one.
+        let old = "- a\n- b\n- c";
+        let snap = snapshot(old);
+        let new = "- a\n    - b\n- c";
+        let result = incremental_update(&snap, new, 4, 0, 4, &parser::ParseOptions::default());
+        assert_matches_full_parse(&result, new);
+    }
+
+    #[test]
+    fn dedent_nested_item() {
+        let old = "- a\n        - b\n- c";
+        let snap = snapshot(old);
+        // Remove 8 leading spaces from the nested line.
+        let new = "- a\n- b\n- c";
+        let result = incremental_update(&snap, new, 4, 8, 0, &parser::ParseOptions::default());
+        assert_matches_full_parse(&result, new);
+    }
+
+    #[test]
+    fn edit_inside_nested_checkbox() {
+        let old = "- a\n    - [ ] task\n    - [x] done";
+        let snap = snapshot(old);
+        // Append " now" to nested "task" (line 2 ends at UTF-16 18).
+        let new = "- a\n    - [ ] task now\n    - [x] done";
+        let result = incremental_update(&snap, new, 18, 0, 4, &parser::ParseOptions::default());
+        assert_matches_full_parse(&result, new);
+    }
+
+    #[test]
+    fn nested_list_edit_with_tab_indent() {
+        let old = "- a\n\t- b\n\t\t- c";
+        let snap = snapshot(old);
+        // Edit tab-nested "b" → "bZ" ('b' at UTF-16 7).
+        let new = "- a\n\t- bZ\n\t\t- c";
+        let result = incremental_update(&snap, new, 8, 0, 1, &parser::ParseOptions::default());
+        assert_matches_full_parse(&result, new);
+    }
+
+    #[test]
+    fn nested_item_becomes_deep_code_when_past_cap() {
+        // Pushing a marker line past the 32-column cap demotes it to
+        // indented code — incremental must agree with the full parse.
+        let old = format!("- a\n{}- deep", " ".repeat(32));
+        let snap = snapshot(&old);
+        let new = format!("- a\n{}- deep", " ".repeat(33));
+        let result = incremental_update(&snap, &new, 4, 0, 1, &parser::ParseOptions::default());
+        assert_matches_full_parse(&result, &new);
     }
 
     #[test]
