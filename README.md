@@ -137,6 +137,23 @@ cargo bench         # criterion benchmarks
 
 ## Known limitations
 
+Nested lists are column-based, not CommonMark container-based:
+
+- A list/checkbox marker may be indented up to 32 tab-expanded columns
+  (tab = next multiple-of-4 column) and always parses as a list item —
+  nesting depth is the leading-column count, not the CommonMark
+  "marker width + 1 relative to the parent" rule. This keeps every
+  line's classification local (required for incremental parity) at the
+  cost of §4.4 fidelity: a 4-space-indented `- item` is a nested list
+  item here, never an indented code block. Indented lines *without* a
+  list marker still parse as indented code.
+- Loose vs. tight lists are not distinguished; blank lines always
+  terminate a list run.
+- Continuation paragraphs inside a list item (a following line indented
+  to the item's content column) are not supported — in grouped mode the
+  line is appended to the previous item's text, in editable mode it
+  parses as its own paragraph/code block.
+
 Good first issues:
 
 - `***text***` at line start is ambiguous with thematic breaks in some edit sequences.

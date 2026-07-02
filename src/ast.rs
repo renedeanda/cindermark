@@ -37,7 +37,10 @@ pub struct BlockNode {
 /// Source metadata for a CommonMark list marker or checklist marker extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListMarkerMeta {
-    /// Leading spaces before the marker. CommonMark allows 0-3 for a list marker.
+    /// Leading whitespace characters (spaces/tabs) before the marker. Nested
+    /// list markers may be indented up to 32 tab-expanded columns; hosts
+    /// receive this value as the text length of the indentation run, so it
+    /// counts characters, not expanded columns.
     pub indent: u32,
     /// UTF-16 range of the marker prefix, excluding indentation and including
     /// the following marker whitespace. For checklists this also includes

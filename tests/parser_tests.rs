@@ -633,6 +633,141 @@ fn mixed_list_and_checkboxes() {
     assert_eq!(cbs[0].text, "Task item");
 }
 
+// MARK: - Nested Lists (deep indentation)
+
+#[test]
+fn editable_nested_list_indent_metadata() {
+    let result = parse_ffi_editable("- a\n    - b\n        - [ ] c");
+    assert_eq!(result.blocks.len(), 3);
+
+    assert_eq!(
+        result.blocks[0].block_type,
+        cindermark::FfiBlockType::BulletItem
+    );
+    assert_eq!(result.blocks[0].list_indent, 0);
+
+    assert_eq!(
+        result.blocks[1].block_type,
+        cindermark::FfiBlockType::BulletItem
+    );
+    assert_eq!(result.blocks[1].list_indent, 4);
+    // Marker range excludes indentation: "    - b" → marker at [8..10)
+    // in document coords (line starts at UTF-16 4).
+    assert_eq!(result.blocks[1].marker_utf16_start, 8);
+    assert_eq!(result.blocks[1].marker_utf16_end, 10);
+    assert_eq!(result.blocks[1].marker_source, "- ");
+    assert_eq!(result.blocks[1].text, "b");
+
+    assert_eq!(
+        result.blocks[2].block_type,
+        cindermark::FfiBlockType::Checkbox
+    );
+    assert_eq!(result.blocks[2].list_indent, 8);
+    assert_eq!(result.blocks[2].marker_source, "- [ ] ");
+    assert_eq!(result.blocks[2].text, "c");
+    assert!(!result.blocks[2].is_checked);
+}
+
+#[test]
+fn nested_preview_items_on_own_lines() {
+    // Grouped mode must not flatten the nested item into the previous
+    // item's text — each item gets its own line in previews.
+    let parser = CindermarkParser::new(None);
+    let result = parser.render_preview("- a\n    - b\n- c".to_string(), 200);
+    assert_eq!(result.plain_text, "a\nb\nc");
+}
+
+#[test]
+fn nested_checkbox_preview_keeps_glyph_line() {
+    let parser = CindermarkParser::new(None);
+    let result = parser.render_preview("- a\n    - [x] done".to_string(), 200);
+    assert_eq!(result.plain_text, "a\n✓ done");
+}
+
+#[test]
+fn toggle_nested_checkbox_ffi() {
+    let parser = CindermarkParser::new(None);
+    let toggled = parser.toggle_checkbox("- a\n    - [ ] nested task".to_string(), 1);
+    assert_eq!(toggled, "- a\n    - [x] nested task");
+    let back = parser.toggle_checkbox(toggled, 1);
+    assert_eq!(back, "- a\n    - [ ] nested task");
+}
+
+#[test]
+fn incremental_edit_in_nested_list_matches_full_parse() {
+    let parser = CindermarkParser::new(None);
+    let old = "- a\n    - b\n        - c\n- d";
+    parser.parse_editable(old.to_string());
+
+    // Append "XY" to nested "b" ('b' is at UTF-16 10, edit after it).
+    let new = "- a\n    - bXY\n        - c\n- d";
+    let incremental = parser.parse_editable_incremental(new.to_string(), 11, 0, 2);
+
+    let full = parse_ffi_editable(new);
+
+    assert_eq!(incremental.blocks.len(), full.blocks.len());
+    for (inc, ful) in incremental.blocks.iter().zip(full.blocks.iter()) {
+        assert_eq!(inc.block_type, ful.block_type);
+        assert_eq!(inc.utf16_start, ful.utf16_start);
+        assert_eq!(inc.utf16_end, ful.utf16_end);
+        assert_eq!(inc.list_indent, ful.list_indent);
+        assert_eq!(inc.marker_utf16_start, ful.marker_utf16_start);
+        assert_eq!(inc.marker_utf16_end, ful.marker_utf16_end);
+        assert_eq!(inc.text, ful.text);
+    }
+}
+
+#[test]
+fn incremental_indent_reclassification_matches_full_parse() {
+    let parser = CindermarkParser::new(None);
+    let old = "- a\n- b\n- c";
+    parser.parse_editable(old.to_string());
+
+    // Indent "- b" by 4 spaces (insert at line start, UTF-16 4).
+    let new = "- a\n    - b\n- c";
+    let incremental = parser.parse_editable_incremental(new.to_string(), 4, 0, 4);
+
+    let full = parse_ffi_editable(new);
+
+    assert_eq!(incremental.blocks.len(), full.blocks.len());
+    for (inc, ful) in incremental.blocks.iter().zip(full.blocks.iter()) {
+        assert_eq!(inc.block_type, ful.block_type);
+        assert_eq!(inc.list_indent, ful.list_indent);
+        assert_eq!(inc.utf16_start, ful.utf16_start);
+        assert_eq!(inc.utf16_end, ful.utf16_end);
+    }
+    assert_eq!(
+        incremental.blocks[1].block_type,
+        cindermark::FfiBlockType::BulletItem
+    );
+    assert_eq!(incremental.blocks[1].list_indent, 4);
+}
+
+#[test]
+fn incremental_style_only_nested_parity() {
+    let parser = CindermarkParser::new(None);
+    let old = "- a\n    - [ ] task";
+    parser.parse_editable(old.to_string());
+
+    // Type "s" at the end of "task" (UTF-16 end = 18).
+    let new = "- a\n    - [ ] tasks";
+    let style = parser.parse_editable_incremental_style_only(new.to_string(), 18, 0, 1);
+
+    let full = parse_ffi_editable(new);
+
+    assert_eq!(style.blocks.len(), full.blocks.len());
+    for (inc, ful) in style.blocks.iter().zip(full.blocks.iter()) {
+        assert_eq!(inc.block_type, ful.block_type);
+        assert_eq!(inc.list_indent, ful.list_indent);
+        assert_eq!(inc.utf16_start, ful.utf16_start);
+        assert_eq!(inc.utf16_end, ful.utf16_end);
+    }
+    assert_eq!(
+        style.blocks[1].block_type,
+        cindermark::FfiBlockType::Checkbox
+    );
+}
+
 // MARK: - Horizontal Rule
 
 #[test]

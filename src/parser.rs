@@ -20,6 +20,12 @@ const MAX_TABLE_COLUMNS: usize = 20;
 /// Maximum data rows in a table.
 const MAX_TABLE_ROWS: usize = 500;
 
+/// Maximum tab-expanded indentation columns for a nested list / checkbox
+/// marker. Marker lines indented deeper than this keep their historical
+/// behavior (indented code block / paragraph continuation), which also
+/// bounds nesting depth for hosts that render one level per 4 columns.
+const MAX_LIST_INDENT_COLUMNS: usize = 32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParsedListKind {
     Bullet,
@@ -122,13 +128,16 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
         // Cannot interrupt a paragraph — that constraint is naturally enforced
         // because paragraph collection runs entirely within a single outer-loop
         // iteration and emits its block before we return here.
-        if is_indented_code_line(line.text) {
+        // Nested-list exception: indented lines that carry a list/checkbox
+        // marker (or an injected U+FFFC marker attachment) are list items,
+        // not code — see `starts_indented_code`.
+        if starts_indented_code(line.text) {
             let start_line = i;
             let mut code_lines: Vec<String> = Vec::new();
             let mut last_content_offset = 0; // index in code_lines past the last non-blank line
             while i < lines.len() {
                 let cl = lines[i].text;
-                if is_indented_code_line(cl) {
+                if starts_indented_code(cl) {
                     code_lines.push(strip_indented_code_indent(cl).to_string());
                     i += 1;
                     last_content_offset = code_lines.len();
@@ -754,6 +763,29 @@ fn is_indented_code_line(line: &str) -> bool {
     false
 }
 
+/// True when the line's first non-whitespace character is U+FFFC — the
+/// object replacement character host editors substitute for injected list
+/// marker attachments. Such lines are attachment carriers, not code: a
+/// deeply indented list item whose marker was replaced by an attachment
+/// must keep parsing as paragraph content so the editor's marker layout
+/// (not code styling) applies on re-parse.
+fn is_attachment_carrier_line(line: &str) -> bool {
+    line.trim_start_matches([' ', '\t']).starts_with('\u{FFFC}')
+}
+
+/// Whether the line opens (or continues) an indented code block.
+///
+/// List and checkbox markers win over indented code up to
+/// `MAX_LIST_INDENT_COLUMNS`, so nested list items indented ≥4 columns
+/// parse as list items instead of code. Attachment-carrier lines (U+FFFC)
+/// always stay paragraph content. Both are deliberate deviations from
+/// CommonMark §4.4 in favor of editor-friendly nested lists.
+fn starts_indented_code(line: &str) -> bool {
+    is_indented_code_line(line)
+        && parse_list_marker(line).is_none()
+        && !is_attachment_carrier_line(line)
+}
+
 /// Strip the 4-space (or 1-tab) indentation from an indented-code line.
 fn strip_indented_code_indent(line: &str) -> &str {
     let bytes = line.as_bytes();
@@ -846,11 +878,23 @@ fn is_horizontal_rule(line: &str) -> bool {
 
 fn parse_list_marker(line: &str) -> Option<ParsedListMarker<'_>> {
     let bytes = line.as_bytes();
+    // Leading whitespace scan with CommonMark tab expansion: a tab advances
+    // to the next multiple-of-4 column. `indent` stays the count of leading
+    // whitespace CHARACTERS (== bytes; indentation is ASCII), matching what
+    // hosts already receive for 0-3 space indents — the FFI consumer treats
+    // it as a UTF-16 length covering the indentation run. The tab-expanded
+    // `columns` value is only used to cap the nesting depth.
     let mut indent = 0;
-    while indent < bytes.len() && bytes[indent] == b' ' {
+    let mut columns = 0usize;
+    while indent < bytes.len() {
+        match bytes[indent] {
+            b' ' => columns += 1,
+            b'\t' => columns = (columns / 4 + 1) * 4,
+            _ => break,
+        }
         indent += 1;
     }
-    if indent > 3 || indent >= bytes.len() {
+    if columns > MAX_LIST_INDENT_COLUMNS || indent >= bytes.len() {
         return None;
     }
 
@@ -1512,6 +1556,278 @@ mod tests {
         assert!(
             matches!(&blocks[1].kind, BlockKind::NumberedItem { number: 2, text } if text == "second")
         );
+    }
+
+    // MARK: - Nested lists (deep indentation)
+
+    /// Returns the block's list-marker indent, panicking if the block has
+    /// no marker metadata (i.e. it isn't a list/checkbox item).
+    fn marker_indent(block: &BlockNode) -> u32 {
+        block
+            .list_marker
+            .as_ref()
+            .expect("expected list marker meta")
+            .indent
+    }
+
+    #[test]
+    fn nested_bullets_two_space_steps() {
+        let blocks = parse_editable("- a\n  - b\n    - c");
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(&blocks[0].kind, BlockKind::BulletItem { text } if text == "a"));
+        assert!(matches!(&blocks[1].kind, BlockKind::BulletItem { text } if text == "b"));
+        assert!(matches!(&blocks[2].kind, BlockKind::BulletItem { text } if text == "c"));
+        assert_eq!(marker_indent(&blocks[0]), 0);
+        assert_eq!(marker_indent(&blocks[1]), 2);
+        assert_eq!(marker_indent(&blocks[2]), 4);
+    }
+
+    #[test]
+    fn nested_bullet_four_space_is_list_item_not_code() {
+        // Previously degenerate: `    - b` parsed as an indented code block.
+        let blocks = parse_editable("- a\n    - b");
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[1].kind, BlockKind::BulletItem { text } if text == "b"));
+        assert_eq!(marker_indent(&blocks[1]), 4);
+    }
+
+    #[test]
+    fn nested_bullet_six_space() {
+        let blocks = parse_editable("- a\n    - b\n      - c");
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(&blocks[2].kind, BlockKind::BulletItem { text } if text == "c"));
+        assert_eq!(marker_indent(&blocks[2]), 6);
+    }
+
+    #[test]
+    fn standalone_deep_bullet_is_list_item() {
+        // Deliberate deviation from CommonMark §4.4: a 4-space-indented
+        // marker line is a list item even without a parent list.
+        let blocks = parse_editable("    - item");
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(&blocks[0].kind, BlockKind::BulletItem { text } if text == "item"));
+        assert_eq!(marker_indent(&blocks[0]), 4);
+    }
+
+    #[test]
+    fn nested_ordered_under_ordered_three_space() {
+        // 3-space nesting always worked; regression guard.
+        let blocks = parse_editable("1. a\n   1. b");
+        assert_eq!(blocks.len(), 2);
+        assert!(
+            matches!(&blocks[1].kind, BlockKind::NumberedItem { number: 1, text } if text == "b")
+        );
+        assert_eq!(marker_indent(&blocks[1]), 3);
+    }
+
+    #[test]
+    fn nested_ordered_under_ordered_four_space() {
+        let blocks = parse_editable("1. a\n    1. b\n    2. c\n2. d");
+        assert_eq!(blocks.len(), 4);
+        assert!(
+            matches!(&blocks[1].kind, BlockKind::NumberedItem { number: 1, text } if text == "b")
+        );
+        assert!(
+            matches!(&blocks[2].kind, BlockKind::NumberedItem { number: 2, text } if text == "c")
+        );
+        assert!(
+            matches!(&blocks[3].kind, BlockKind::NumberedItem { number: 2, text } if text == "d")
+        );
+        assert_eq!(marker_indent(&blocks[1]), 4);
+        assert_eq!(marker_indent(&blocks[3]), 0);
+    }
+
+    #[test]
+    fn nested_checkbox_under_bullet() {
+        // Previously degenerate: the indented checkbox line became code.
+        let blocks = parse_editable("- a\n    - [ ] task\n    - [x] done");
+        assert_eq!(blocks.len(), 3);
+        assert!(
+            matches!(&blocks[1].kind, BlockKind::Checkbox { checked: false, text } if text == "task")
+        );
+        assert!(
+            matches!(&blocks[2].kind, BlockKind::Checkbox { checked: true, text } if text == "done")
+        );
+        assert_eq!(marker_indent(&blocks[1]), 4);
+        assert_eq!(marker_indent(&blocks[2]), 4);
+    }
+
+    #[test]
+    fn nested_mixed_marker_kinds() {
+        let blocks = parse_editable("- a\n    1. b\n        - [ ] c");
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(&blocks[0].kind, BlockKind::BulletItem { .. }));
+        assert!(matches!(&blocks[1].kind, BlockKind::NumberedItem { .. }));
+        assert!(matches!(&blocks[2].kind, BlockKind::Checkbox { .. }));
+        assert_eq!(marker_indent(&blocks[1]), 4);
+        assert_eq!(marker_indent(&blocks[2]), 8);
+    }
+
+    #[test]
+    fn tab_indented_bullet_is_list_item() {
+        // A tab expands to the next multiple-of-4 column for the depth cap,
+        // but the reported indent stays the CHARACTER count (1 tab = 1 char)
+        // because hosts consume it as a text range length.
+        let blocks = parse_editable("- a\n\t- b\n\t\t- c");
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(&blocks[1].kind, BlockKind::BulletItem { text } if text == "b"));
+        assert!(matches!(&blocks[2].kind, BlockKind::BulletItem { text } if text == "c"));
+        assert_eq!(marker_indent(&blocks[1]), 1);
+        assert_eq!(marker_indent(&blocks[2]), 2);
+    }
+
+    #[test]
+    fn mixed_space_tab_indent() {
+        // "  \t" = column 2, then tab advances to column 4 → 3 chars.
+        let blocks = parse_editable("  \t- x");
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(&blocks[0].kind, BlockKind::BulletItem { text } if text == "x"));
+        assert_eq!(marker_indent(&blocks[0]), 3);
+        let meta = blocks[0].list_marker.as_ref().unwrap();
+        assert_eq!(meta.marker_utf16_start, 3);
+        assert_eq!(meta.marker_utf16_end, 5);
+        assert_eq!(meta.marker_source, "- ");
+    }
+
+    #[test]
+    fn deep_marker_range_excludes_indentation() {
+        let blocks = parse_editable("    - b");
+        let meta = blocks[0].list_marker.as_ref().unwrap();
+        assert_eq!(meta.indent, 4);
+        assert_eq!(meta.marker_utf16_start, 4);
+        assert_eq!(meta.marker_utf16_end, 6);
+        assert_eq!(meta.marker_source, "- ");
+    }
+
+    #[test]
+    fn six_plus_nesting_levels() {
+        let mut src = String::new();
+        for level in 0..7 {
+            src.push_str(&" ".repeat(level * 4));
+            src.push_str(&format!("- level {}\n", level));
+        }
+        let blocks = parse_editable(&src);
+        assert_eq!(blocks.len(), 7);
+        for (level, block) in blocks.iter().enumerate() {
+            assert!(
+                matches!(&block.kind, BlockKind::BulletItem { text } if *text == format!("level {}", level)),
+                "level {} misparsed: {:?}",
+                level,
+                block.kind
+            );
+            assert_eq!(marker_indent(block), (level * 4) as u32);
+        }
+    }
+
+    #[test]
+    fn indent_cap_at_32_columns() {
+        // 32 columns: still a list item.
+        let at_cap = format!("{}- ok", " ".repeat(32));
+        let blocks = parse_editable(&at_cap);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(&blocks[0].kind, BlockKind::BulletItem { text } if text == "ok"));
+        assert_eq!(marker_indent(&blocks[0]), 32);
+
+        // 33 columns: past the cap → historical indented-code behavior.
+        let past_cap = format!("{}- too deep", " ".repeat(33));
+        let blocks = parse_editable(&past_cap);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(&blocks[0].kind, BlockKind::CodeBlock { .. }));
+
+        // 9 tabs = 36 columns: past the cap too.
+        let tabs = format!("{}- too deep", "\t".repeat(9));
+        let blocks = parse_editable(&tabs);
+        assert!(matches!(&blocks[0].kind, BlockKind::CodeBlock { .. }));
+    }
+
+    #[test]
+    fn attachment_carrier_line_is_paragraph_not_code() {
+        // After the host editor injects a marker attachment, a nested list
+        // line becomes `    \u{FFFC}text`. It must re-parse as a paragraph
+        // (the editor styles marker layout from the attachment), never as
+        // an indented code block.
+        let blocks = parse_editable("    \u{FFFC}text");
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            matches!(&blocks[0].kind, BlockKind::Paragraph { .. }),
+            "expected paragraph, got {:?}",
+            blocks[0].kind
+        );
+
+        // Tab-prefixed carrier line too.
+        let blocks = parse_editable("\t\u{FFFC}text");
+        assert!(matches!(&blocks[0].kind, BlockKind::Paragraph { .. }));
+    }
+
+    #[test]
+    fn deep_indent_plain_text_still_code() {
+        // Non-marker indented lines keep CommonMark indented-code behavior.
+        let blocks = parse_editable("    let x = 1");
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(&blocks[0].kind, BlockKind::CodeBlock { .. }));
+    }
+
+    #[test]
+    fn indented_code_run_broken_by_nested_list_line() {
+        // A marker line inside an indented run splits the code block.
+        let blocks = parse_editable("    code one\n    - item\n    code two");
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(&blocks[0].kind, BlockKind::CodeBlock { code, .. } if code == "code one"));
+        assert!(matches!(&blocks[1].kind, BlockKind::BulletItem { text } if text == "item"));
+        assert!(matches!(&blocks[2].kind, BlockKind::CodeBlock { code, .. } if code == "code two"));
+    }
+
+    #[test]
+    fn grouped_nested_bullets_not_flattened() {
+        // Previously the nested line was glued onto the previous item's
+        // text ("a - b"). Now each marker line is its own item.
+        let blocks = parse_grouped("- a\n    - b\n- c");
+        assert_eq!(blocks.len(), 1);
+        if let BlockKind::BulletList { items } = &blocks[0].kind {
+            let texts: Vec<&str> = items.iter().map(|i| i.text.as_str()).collect();
+            assert_eq!(texts, vec!["a", "b", "c"]);
+        } else {
+            panic!("Expected bullet list, got {:?}", blocks[0].kind);
+        }
+    }
+
+    #[test]
+    fn grouped_nested_checkbox_splits_bullet_run() {
+        let blocks = parse_grouped("- a\n    - [ ] t\n- b");
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(&blocks[0].kind, BlockKind::BulletList { .. }));
+        assert!(
+            matches!(&blocks[1].kind, BlockKind::Checkbox { checked: false, text } if text == "t")
+        );
+        assert!(matches!(&blocks[2].kind, BlockKind::BulletList { .. }));
+        assert_eq!(marker_indent(&blocks[1]), 4);
+    }
+
+    #[test]
+    fn grouped_nested_ordered_separate_run() {
+        let blocks = parse_grouped("- a\n    1. b");
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0].kind, BlockKind::BulletList { .. }));
+        if let BlockKind::OrderedList { items, .. } = &blocks[1].kind {
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].text, "b");
+        } else {
+            panic!("Expected ordered list, got {:?}", blocks[1].kind);
+        }
+    }
+
+    #[test]
+    fn toggle_nested_checkbox() {
+        let toggled = toggle_checkbox("- a\n    - [ ] task", 1);
+        assert_eq!(toggled, "- a\n    - [x] task");
+        let toggled_back = toggle_checkbox(&toggled, 1);
+        assert_eq!(toggled_back, "- a\n    - [ ] task");
+    }
+
+    #[test]
+    fn toggle_tab_indented_checkbox() {
+        let toggled = toggle_checkbox("- a\n\t- [ ] task", 1);
+        assert_eq!(toggled, "- a\n\t- [x] task");
     }
 
     // MARK: - Paragraph
