@@ -1,8 +1,13 @@
 # Cindermark
 
+[![CI](https://github.com/renedeanda/cindermark/actions/workflows/ci.yml/badge.svg)](https://github.com/renedeanda/cindermark/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/renedeanda/cindermark)](https://github.com/renedeanda/cindermark/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20macOS%20%7C%20Rust-lightgrey)
+
 **A high-performance incremental Markdown parser for native text editors, written in Rust.**
 
-Cindermark is the engine that powers the live Markdown editor in [Ember Notes](https://github.com/renedeanda). It was built for one job and does it well: parsing Markdown *while the user types*, fast enough that a native iOS/macOS editor never waits on it.
+Cindermark is the engine that powers the live Markdown editor in [Ember Notes](https://embernotes.app). It was built for one job and does it well: parsing Markdown *while the user types*, fast enough that a native iOS/macOS editor never waits on it.
 
 Most Markdown parsers are built for rendering documents. Cindermark is built for **editing** them:
 
@@ -63,7 +68,7 @@ let update = parser.parseEditableIncrementalStyleOnly(
 
 ### Vendored / submodule
 
-Ember Notes consumes Cindermark as a git submodule and links the static library directly:
+[Ember Notes](https://embernotes.app) consumes Cindermark as a git submodule and links the static library directly:
 
 ```bash
 git submodule add https://github.com/renedeanda/cindermark
@@ -89,15 +94,15 @@ let result = parser.parse("# Hello\n\nSome **bold** text.".to_string());
 
 ## Performance
 
-Numbers from `cargo bench` (criterion) on x86_64 Linux; release profile with fat LTO. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for methodology.
+Numbers from `cargo bench` (criterion); release profile with fat LTO. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for methodology.
 
-| Benchmark | Time |
-|---|---|
-| Incremental keystroke, 500-line note | ~255 µs |
-| Incremental keystroke, 2,500-line note | ~1.3 ms |
-| Incremental keystroke, 10,000-line note | ~8.7 ms |
-| Full parse, 500-line note | ~1.3 ms |
-| Full parse, 2,500-line note | ~7.3 ms |
+| Benchmark | Apple Silicon | x86_64 Linux |
+|---|---|---|
+| Incremental keystroke, 500-line note | ~117 µs | ~255 µs |
+| Incremental keystroke, 2,500-line note | ~562 µs | ~1.3 ms |
+| Incremental keystroke, 10,000-line note | ~2.3 ms | ~8.7 ms |
+| Full parse, 500-line note | ~666 µs | ~1.3 ms |
+| Full parse, 2,500-line note | ~3.2 ms | ~7.3 ms |
 
 The design targets the editor's real budget: a debounced keystroke on a large document must cost single-digit milliseconds, and it does — even at 10,000 lines.
 

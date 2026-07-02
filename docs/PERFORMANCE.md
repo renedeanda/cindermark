@@ -21,22 +21,22 @@ Run them yourself:
 cargo bench
 ```
 
-Numbers below are from x86_64 Linux. Apple Silicon is typically faster;
+Numbers below are from x86_64 Linux and Apple Silicon (M-series);
 relative deltas are what matter.
 
 ## Current numbers
 
 <!-- Updated by perf commits; see git history for per-change deltas. -->
 
-| Benchmark | Time | vs. pre-clone-elimination |
-|---|---|---|
-| parse_500_lines | ~1.30 ms | — |
-| parse_2500_lines | ~7.3 ms | — |
-| parse_editable_500_lines | ~1.39 ms | −7% |
-| incremental_keystroke_500 | ~255 µs | −33% |
-| incremental_keystroke_2500 | ~1.30 ms | −34% |
-| incremental_keystroke_10k | ~8.7 ms | −14% |
-| incremental_with_stats_2500 | ~3.85 ms | −28% |
+| Benchmark | x86_64 Linux | Apple Silicon | vs. pre-clone-elimination (Linux) |
+|---|---|---|---|
+| parse_500_lines | ~1.30 ms | ~666 µs | — |
+| parse_2500_lines | ~7.3 ms | ~3.2 ms | — |
+| parse_editable_500_lines | ~1.39 ms | ~809 µs | −7% |
+| incremental_keystroke_500 | ~255 µs | ~117 µs | −33% |
+| incremental_keystroke_2500 | ~1.30 ms | ~562 µs | −34% |
+| incremental_keystroke_10k | ~8.7 ms | ~2.3 ms | −14% |
+| incremental_with_stats_2500 | ~3.85 ms | ~1.96 ms | −28% |
 
 ## What the FFI boundary costs
 
