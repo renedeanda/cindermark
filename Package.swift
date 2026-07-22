@@ -9,7 +9,7 @@ import PackageDescription
 // On untagged commits (including main before the first release) the binary
 // target is NOT resolvable — depend on a tagged version:
 //
-//   .package(url: "https://github.com/renedeanda/cindermark", from: "0.1.0")
+//   .package(url: "https://github.com/renedeanda/cindermark", from: "0.2.0")
 
 let package = Package(
     name: "Cindermark",
