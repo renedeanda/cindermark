@@ -43,7 +43,7 @@ jobs:
       - name: Generate Swift bindings
         run: |
           cargo run --features bindgen --bin uniffi-bindgen generate src/cindermark.udl \
-            --language swift --out-dir out/bindings
+            --language swift --no-format --out-dir out/bindings
           mkdir -p out/headers
           cp out/bindings/CindermarkFFIFFI.h out/headers/
           cat > out/headers/module.modulemap <<'EOF'

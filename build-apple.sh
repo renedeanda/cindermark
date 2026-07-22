@@ -85,6 +85,7 @@ generate_bindings() {
         --bin uniffi-bindgen generate \
         "$CRATE_DIR/src/cindermark.udl" \
         --language swift \
+        --no-format \
         --out-dir "$OUT_DIR"
     # Sync header into the Xcode module directory so builds see the latest FFI declarations
     mkdir -p "$OUT_DIR/CindermarkFFIFFI"

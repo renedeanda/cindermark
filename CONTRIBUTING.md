@@ -32,7 +32,7 @@ passes:
 
 ```bash
 cargo run --features bindgen --bin uniffi-bindgen generate src/cindermark.udl \
-    --language swift --out-dir /tmp/cindermark-bindings
+    --language swift --no-format --out-dir /tmp/cindermark-bindings
 cp /tmp/cindermark-bindings/CindermarkFFI.swift swift/Sources/Cindermark/
 ```
 
