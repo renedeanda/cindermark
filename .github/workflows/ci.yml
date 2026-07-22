@@ -37,18 +37,28 @@ jobs:
       - name: rustfmt
         run: cargo fmt --check
 
-      - name: clippy
+      # Lint and test BOTH configurations: the default pure-Rust build (what
+      # `cargo add cindermark` gives — three dependencies, no UniFFI) and the
+      # full `ffi` + `bindgen` build (the Swift/Apple path). This guarantees a
+      # change that compiles in one configuration but not the other is caught.
+      - name: clippy (default / pure Rust)
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: tests
+      - name: clippy (ffi + bindgen)
+        run: cargo clippy --all-targets --features bindgen -- -D warnings
+
+      - name: tests (default / pure Rust)
         run: cargo test
+
+      - name: tests (ffi)
+        run: cargo test --features ffi
 
       - name: benches compile
         run: cargo bench --no-run
 
       - name: Swift bindings drift check
         run: |
-          cargo run --bin uniffi-bindgen generate src/cindermark.udl \
+          cargo run --features bindgen --bin uniffi-bindgen generate src/cindermark.udl \
             --language swift --out-dir /tmp/bindings-check
           diff -u swift/Sources/Cindermark/CindermarkFFI.swift /tmp/bindings-check/CindermarkFFI.swift \
             || { echo "::error::Committed Swift bindings are stale. Regenerate with uniffi-bindgen (see CONTRIBUTING.md)."; exit 1; }

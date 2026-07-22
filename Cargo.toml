@@ -11,19 +11,36 @@ readme = "README.md"
 keywords = ["markdown", "parser", "incremental", "commonmark", "uniffi"]
 categories = ["parser-implementations", "text-processing"]
 
+# Build docs with the FFI surface enabled so the full API (including the Swift
+# binding types) is documented on docs.rs, even though `ffi` is off by default.
+[package.metadata.docs.rs]
+features = ["ffi"]
+
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
 name = "cindermark"
 
 [features]
-default = ["ffi"]
-# UniFFI scaffolding + the uniffi-bindgen CLI (Apple/Swift consumers).
+# Pure-Rust parser by default. `cargo add cindermark` pulls exactly three
+# crates — memchr, rustc-hash, unicode-segmentation — and no build-script
+# codegen. Everything UniFFI-related is opt-in below.
+default = []
+# `ffi`: UniFFI scaffolding for the generated Swift / Apple bindings. Enabled
+# automatically by build-apple.sh and the release workflow; Rust-only
+# consumers never need it.
 ffi = ["dep:uniffi"]
-# wasm-bindgen surface for browser demos (mutually independent of `ffi`).
+# `bindgen`: the `uniffi-bindgen` CLI that (re)generates the Swift bindings
+# from cindermark.udl. Only the bundled `uniffi-bindgen` binary requires it,
+# so the CLI toolchain (clap, goblin, …) never reaches a library consumer's
+# dependency graph.
+bindgen = ["ffi", "uniffi/cli"]
+# `wasm`: wasm-bindgen surface for the browser demo (independent of `ffi`).
 wasm = ["dep:wasm-bindgen"]
 
 [dependencies]
-uniffi = { version = "0.28", features = ["cli"], optional = true }
+# Optional and off by default — pulled in only by the `ffi` feature. The `cli`
+# machinery lives behind `bindgen` (see above), keeping consumer builds lean.
+uniffi = { version = "0.28", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 memchr = "2"
 rustc-hash = "2"
@@ -79,7 +96,9 @@ harness = false
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
-required-features = ["ffi"]
+# The binding generator needs the UniFFI CLI toolchain; `bindgen` pulls it in
+# (and implies `ffi`). Library consumers never build this target.
+required-features = ["bindgen"]
 
 # wasm-pack's bundled wasm-opt crashes on this crate's output; rustc's own
 # release profile (fat LTO, codegen-units=1) already does the heavy lifting.

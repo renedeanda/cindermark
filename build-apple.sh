@@ -79,8 +79,9 @@ esac
 generate_bindings() {
     echo "==> Generating Swift bindings..."
     # Uses the crate's custom uniffi-bindgen binary (see uniffi-bindgen.rs).
-    # Must build it first, then invoke with the UDL file.
-    cargo run --manifest-path "$CRATE_DIR/Cargo.toml" \
+    # Must build it first, then invoke with the UDL file. `bindgen` enables the
+    # UniFFI CLI toolchain the binary needs (and implies `ffi`).
+    cargo run --manifest-path "$CRATE_DIR/Cargo.toml" --features bindgen \
         --bin uniffi-bindgen generate \
         "$CRATE_DIR/src/cindermark.udl" \
         --language swift \
@@ -128,9 +129,9 @@ copy_profile_libs() {
 build_dev() {
     echo "==> Building dev targets (simulator + device + macOS, optimized)..."
 
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --profile dev-optimized --target "$SIM_TARGET"
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --profile dev-optimized --target aarch64-apple-ios
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --profile dev-optimized --target "$MACOS_TARGET"
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi --profile dev-optimized --target "$SIM_TARGET"
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi --profile dev-optimized --target aarch64-apple-ios
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi --profile dev-optimized --target "$MACOS_TARGET"
 
     copy_profile_libs "dev-optimized" "dev-optimized"
 }
@@ -138,9 +139,9 @@ build_dev() {
 build_debug() {
     echo "==> Building debug targets (simulator + device + macOS, unoptimized)..."
 
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --target "$SIM_TARGET"
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --target aarch64-apple-ios
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --target "$MACOS_TARGET"
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi --target "$SIM_TARGET"
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi --target aarch64-apple-ios
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi --target "$MACOS_TARGET"
 
     copy_profile_libs "debug" "debug"
 }
@@ -149,23 +150,23 @@ build_release() {
     echo "==> Building release for all targets..."
 
     # iOS device (arm64)
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" \
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi \
         --release --target aarch64-apple-ios
 
     # iOS simulator (arm64)
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" \
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi \
         --release --target aarch64-apple-ios-sim
 
     # iOS simulator (x86_64, for Intel Macs)
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" \
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi \
         --release --target x86_64-apple-ios
 
     # macOS (arm64)
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" \
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi \
         --release --target aarch64-apple-darwin
 
     # macOS (x86_64)
-    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" \
+    cargo build --manifest-path "$CRATE_DIR/Cargo.toml" --features ffi \
         --release --target x86_64-apple-darwin
 
     local TARGET_DIR="$CRATE_DIR/target"
