@@ -93,7 +93,9 @@ cindermark = "0.1"
 ```rust
 use cindermark::CindermarkParser;
 
-let parser = CindermarkParser::new();
+// Pass None for CommonMark-clean defaults, or Some("myapp:".into()) to
+// enable the attachment-marker extension.
+let parser = CindermarkParser::new(None);
 let result = parser.parse("# Hello\n\nSome **bold** text.".to_string());
 ```
 
