@@ -188,6 +188,22 @@ Good first issues:
 - `***text***` at line start is ambiguous with thematic breaks in some edit sequences.
 - Nested inline spans (e.g. `` **`code`** ``) render the outer span only in editable mode.
 
+## Built with Cindermark
+
+Shipping Cindermark in something? Add your project — open a PR appending a line to this list:
+
+- [Ember Notes](https://embernotes.app) — the native iOS/macOS notes app Cindermark was extracted from.
+
+<!-- Add yours above: - [Project name](https://link) — one-line description of what you built. -->
+
+## Contributing & community
+
+Contributions are welcome — Cindermark is small and focused, and changes that keep it that way especially so.
+
+- 🐛 **Found a bug or want a feature?** [Open an issue](https://github.com/renedeanda/cindermark/issues).
+- 💬 **Questions, ideas, or built something cool?** Start a [discussion](https://github.com/renedeanda/cindermark/discussions) — I'd genuinely love to see what you make.
+- 🛠️ **Contributing code?** See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup and the pre-PR checklist.
+
 ## License
 
-MIT © René DeAnda. If you ship Cindermark in something cool, [say hi](https://github.com/renedeanda)!
+MIT © [René DeAnda](https://github.com/renedeanda).
