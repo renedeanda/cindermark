@@ -17,7 +17,7 @@ Most Markdown parsers are built for rendering documents. Cindermark is built for
 - **Incremental re-parsing.** After an edit, Cindermark re-parses only the dirty blocks and shifts the rest, then tells you exactly which block range changed so you can restyle just that region.
 - **Single-pass architecture.** One pass over the source produces the full block + inline AST, document stats (word counts, reading time, checkbox progress), wiki links, and headings. It replaced 8–9 full-text regex passes in the app it came from.
 - **First-class Swift bindings.** Generated with [UniFFI](https://mozilla.github.io/uniffi-rs/) — a real Swift API, not a C header. Rust panics surface as catchable Swift errors, never app crashes.
-- **Tiny dependency tree.** `memchr`, `rustc-hash`, `unicode-segmentation`, `uniffi`. That's it.
+- **Tiny dependency tree.** The default build depends on exactly three crates — `memchr`, `rustc-hash`, `unicode-segmentation`. UniFFI is compiled only when you opt into the `ffi` feature for Swift bindings, so a pure-Rust `cargo add cindermark` stays lean. (See [Feature flags](#feature-flags).)
 
 ## Syntax support
 
@@ -98,6 +98,26 @@ use cindermark::CindermarkParser;
 let parser = CindermarkParser::new(None);
 let result = parser.parse("# Hello\n\nSome **bold** text.".to_string());
 ```
+
+The full parser API — `parse`, `parse_editable`, the incremental methods, stats,
+wiki-link and heading extraction — is available on the default build with no
+feature flags and no UniFFI dependency.
+
+## Feature flags
+
+Cindermark ships a pure-Rust parser by default and keeps everything
+Swift/UniFFI-related opt-in, so Rust consumers never pay for the bindings
+toolchain:
+
+| Feature | Default | What it adds |
+|---|:---:|---|
+| _(none)_ | ✅ | The parser itself. Three dependencies (`memchr`, `rustc-hash`, `unicode-segmentation`), no build-script codegen. |
+| `ffi` | | UniFFI scaffolding for the Swift/Apple bindings. Enabled automatically by `build-apple.sh` and the release workflow. |
+| `bindgen` | | The `uniffi-bindgen` CLI used to regenerate `CindermarkFFI.swift` from `cindermark.udl`. Only the bundled binary needs it (implies `ffi`). |
+| `wasm` | | A `wasm-bindgen` surface for the browser demo (independent of `ffi`). |
+
+CI builds and tests both the default and the `ffi`/`bindgen` configurations on
+every change, so neither path can regress.
 
 ## Performance
 

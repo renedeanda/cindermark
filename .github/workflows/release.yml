@@ -37,12 +37,12 @@ jobs:
       - name: Build all Apple slices
         run: |
           for target in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin; do
-            cargo build --release --target "$target"
+            cargo build --release --features ffi --target "$target"
           done
 
       - name: Generate Swift bindings
         run: |
-          cargo run --bin uniffi-bindgen generate src/cindermark.udl \
+          cargo run --features bindgen --bin uniffi-bindgen generate src/cindermark.udl \
             --language swift --out-dir out/bindings
           mkdir -p out/headers
           cp out/bindings/CindermarkFFIFFI.h out/headers/
