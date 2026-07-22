@@ -59,6 +59,6 @@ jobs:
       - name: Swift bindings drift check
         run: |
           cargo run --features bindgen --bin uniffi-bindgen generate src/cindermark.udl \
-            --language swift --out-dir /tmp/bindings-check
+            --language swift --no-format --out-dir /tmp/bindings-check
           diff -u swift/Sources/Cindermark/CindermarkFFI.swift /tmp/bindings-check/CindermarkFFI.swift \
             || { echo "::error::Committed Swift bindings are stale. Regenerate with uniffi-bindgen (see CONTRIBUTING.md)."; exit 1; }
