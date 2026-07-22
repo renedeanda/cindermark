@@ -1,5 +1,7 @@
 # Cindermark
 
+[![crates.io](https://img.shields.io/crates/v/cindermark.svg)](https://crates.io/crates/cindermark)
+[![docs.rs](https://img.shields.io/docsrs/cindermark)](https://docs.rs/cindermark)
 [![CI](https://github.com/renedeanda/cindermark/actions/workflows/ci.yml/badge.svg)](https://github.com/renedeanda/cindermark/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/renedeanda/cindermark)](https://github.com/renedeanda/cindermark/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -66,9 +68,12 @@ let update = parser.parseEditableIncrementalStyleOnly(
 
 > **Note:** the SwiftPM binary target resolves for **tagged releases**. If you're building from an untagged checkout, use `build-apple.sh` below instead.
 
-### Vendored / submodule
+### Advanced: build from source (vendored / submodule)
 
-[Ember Notes](https://embernotes.app) consumes Cindermark as a git submodule and links the static library directly:
+Most apps should use Swift Package Manager above. This path is for building
+directly from source — first-party integrations, contributors, or building from
+an untagged commit with custom flags. [Ember Notes](https://embernotes.app)
+consumes Cindermark as a git submodule and links the static library directly:
 
 ```bash
 git submodule add https://github.com/renedeanda/cindermark
@@ -82,7 +87,7 @@ This drops `libcindermark.a` (per-SDK: device / simulator / macOS), the generate
 
 ```toml
 [dependencies]
-cindermark = { git = "https://github.com/renedeanda/cindermark" }
+cindermark = "0.1"
 ```
 
 ```rust
