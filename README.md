@@ -170,24 +170,45 @@ Nested lists are column-based, not CommonMark container-based:
 
 - A list/checkbox marker may be indented up to 32 tab-expanded columns
   (tab = next multiple-of-4 column) and always parses as a list item —
-  nesting depth is the leading-column count, not the CommonMark
-  "marker width + 1 relative to the parent" rule. This keeps every
-  line's classification local (required for incremental parity) at the
-  cost of §4.4 fidelity: a 4-space-indented `- item` is a nested list
-  item here, never an indented code block. Indented lines *without* a
-  list marker still parse as indented code.
+  nesting depth is the count of leading whitespace *characters* (a tab
+  counts as one toward depth, though it expands to a multiple-of-4 column
+  for the 32-column cap), not the CommonMark "marker width + 1 relative
+  to the parent" rule. This keeps every line's classification local
+  (required for incremental parity) at the cost of §4.4 fidelity: a
+  4-space-indented `- item` is a nested list item here, never an indented
+  code block. Indented lines *without* a list marker still parse as
+  indented code.
 - Loose vs. tight lists are not distinguished; blank lines always
   terminate a list run.
 - Continuation paragraphs inside a list item (a following line indented
   to the item's content column) are not supported — in grouped mode the
   line is appended to the previous item's text, in editable mode it
   parses as its own paragraph/code block.
+- Grouped mode flattens a nested same-marker list into a single list and
+  does not preserve per-item depth. **Reconstructable nesting is an
+  editable-mode feature** — there, each item keeps its own indent.
 
 Good first issues:
 
 - `***text***` at line start is ambiguous with thematic breaks in some edit sequences.
-- Nested inline spans (e.g. `` **`code`** ``) render the outer span only in editable mode.
+- Emphasis wrapping a code span (e.g. `` **`code`** ``) drops the outer bold/italic: the code span claims its byte range and the overlapping emphasis is discarded (in both parse modes).
+
+## Built with Cindermark
+
+Shipping Cindermark in something? Add your project — open a PR appending a line to this list:
+
+- [Ember Notes](https://embernotes.app) — the native iOS/macOS notes app Cindermark was extracted from.
+
+<!-- Add yours above: - [Project name](https://link) — one-line description of what you built. -->
+
+## Contributing & community
+
+Contributions are welcome — Cindermark is small and focused, and changes that keep it that way especially so.
+
+- 🐛 **Found a bug or want a feature?** [Open an issue](https://github.com/renedeanda/cindermark/issues).
+- 💬 **Questions, ideas, or built something cool?** Start a [discussion](https://github.com/renedeanda/cindermark/discussions) — I'd genuinely love to see what you make.
+- 🛠️ **Contributing code?** See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup and the pre-PR checklist.
 
 ## License
 
-MIT © René DeAnda. If you ship Cindermark in something cool, [say hi](https://github.com/renedeanda)!
+MIT © [René DeAnda](https://github.com/renedeanda).
