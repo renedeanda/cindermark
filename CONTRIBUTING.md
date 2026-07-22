@@ -31,7 +31,7 @@ If you changed the UniFFI interface (`src/cindermark.udl` or exported types in
 passes:
 
 ```bash
-cargo run --bin uniffi-bindgen generate src/cindermark.udl \
+cargo run --features bindgen --bin uniffi-bindgen generate src/cindermark.udl \
     --language swift --out-dir /tmp/cindermark-bindings
 cp /tmp/cindermark-bindings/CindermarkFFI.swift swift/Sources/Cindermark/
 ```

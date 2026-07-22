@@ -29,7 +29,7 @@ CommonMark core plus the extensions a notes app actually needs:
 | Inline | Bold, italic, bold-italic (full CommonMark delimiter-run algorithm incl. Unicode flanking), strikethrough, inline code (multi-backtick), links, autolinks (bare URLs, domains, emails, subreddits), wiki links `[[...]]`, highlights `==...==` (plus colored/hex variants), underline (`<u>`/tilde), footnote refs, hex color literals, comments |
 | Editor extras | Document stats as a parse byproduct, wiki-link extraction, heading outline extraction, checkbox toggling, plain-text preview rendering with span ranges, configurable image-marker URI scheme for attachment placeholders |
 
-**New in 0.2.0:** CommonMark-style **nested lists** — bullets, ordered lists, and checkboxes indented for nesting (up to 32 tab-expanded columns) now parse as nested items instead of degrading to indented code — plus a **WebAssembly build** (`wasm` feature) that powers the [live browser playground](https://embernotes.app/cindermark).
+**New in 0.2.0:** **nested lists** — bullets, ordered lists, and checkboxes indented for nesting (up to 32 tab-expanded columns) now parse as nested items instead of degrading to indented code (column-based; see [Known limitations](#known-limitations)) — plus a **WebAssembly build** (`wasm` feature) that powers the [live browser playground](https://embernotes.app/cindermark).
 
 Everything is covered by **457 tests**, including checks that every incremental parse result must equal the equivalent full parse.
 
