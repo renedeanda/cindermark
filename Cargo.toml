@@ -1,6 +1,6 @@
 [package]
 name = "cindermark"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "High-performance incremental Markdown parser with UTF-16 offsets, built for native text editors on Apple platforms"
 authors = ["Rene DeAnda <rene@deanda.org>"]
