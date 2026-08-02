@@ -507,6 +507,11 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                 || is_horizontal_rule(pt)
                 || parse_list_marker(pl).is_some()
                 || parse_footnote_def(pt).is_some()
+                || options
+                    .image_marker_scheme
+                    .as_deref()
+                    .and_then(|scheme| parse_image_marker_line(pt, scheme))
+                    .is_some()
                 || (is_table_row(pt)
                     && i + 1 < lines.len()
                     && is_table_separator(lines[i + 1].text.trim()))
@@ -2529,5 +2534,18 @@ mod tests {
         assert!(blocks
             .iter()
             .any(|b| matches!(b.kind, BlockKind::Paragraph { .. })));
+    }
+
+    #[test]
+    fn image_marker_interrupts_adjacent_paragraphs() {
+        let options = ParseOptions {
+            image_marker_scheme: Some("host:".to_string()),
+        };
+        let src = "Before\n![](host:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)\nAfter\n";
+        let blocks = parse_with_options(src, ParseMode::Editable, &options).blocks;
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(&blocks[0].kind, BlockKind::Paragraph { text } if text == "Before"));
+        assert!(matches!(&blocks[1].kind, BlockKind::ImageMarker { .. }));
+        assert!(matches!(&blocks[2].kind, BlockKind::Paragraph { text } if text == "After"));
     }
 }
