@@ -40,7 +40,7 @@ wasm = ["dep:wasm-bindgen"]
 [dependencies]
 # Optional and off by default — pulled in only by the `ffi` feature. The `cli`
 # machinery lives behind `bindgen` (see above), keeping consumer builds lean.
-uniffi = { version = "0.28", optional = true }
+uniffi = { version = "0.32", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 memchr = "2"
 rustc-hash = "2"
@@ -51,7 +51,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
 
 [build-dependencies]
-uniffi = { version = "0.28", features = ["build"] }
+uniffi = { version = "0.32", features = ["build"] }
 
 [profile.release]
 # Production-grade tuning — this profile is what ships inside host apps
