@@ -88,6 +88,7 @@ fn opaque_inline_content_does_not_produce_underline() {
         "[label](https://example.com/++word++)",
         "$++word++$",
         "<span title='++word++'>text</span>",
+        "[label `++word++`](https://example.com)",
     ] {
         assert!(
             !kinds(source).contains(&FfiInlineType::UnderlinePlus),

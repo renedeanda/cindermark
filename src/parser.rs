@@ -123,6 +123,12 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             }
         }
 
+        if let Some((kind, end_line)) = quoted_math(&lines, i, bytes, &utf16_map) {
+            blocks.push(make_block(kind, &lines, i, end_line, bytes, &utf16_map));
+            i = end_line;
+            continue;
+        }
+
         // Indented code block (CommonMark §4.4): 4+ leading spaces (or tab).
         // Must come before fenced code so `    ```` is treated as code, not a fence.
         // Cannot interrupt a paragraph — that constraint is naturally enforced
@@ -172,6 +178,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                 BlockKind::Math {
                     expression,
                     syntax: MathSyntax::Dollars,
+                    quote_depth: 0,
                     info_string: None,
                     content_utf16_start: utf16_map.byte_to_utf16(content_start as u32, bytes),
                     content_utf16_end: utf16_map.byte_to_utf16(content_end as u32, bytes),
@@ -214,6 +221,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                 BlockKind::Math {
                     expression: code,
                     syntax: MathSyntax::Fence,
+                    quote_depth: 0,
                     info_string: Some(info.to_owned()),
                     content_utf16_start: utf16_map.byte_to_utf16(content_start as u32, bytes),
                     content_utf16_end: utf16_map.byte_to_utf16(content_end as u32, bytes),
@@ -299,6 +307,9 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             let mut quote_lines: Vec<&str> = Vec::new();
             while i < lines.len() {
                 let ql = lines[i].text.trim();
+                if i > start_line && quoted_math_start(lines[i].text).is_some() {
+                    break;
+                }
                 if ql.starts_with("> ") {
                     quote_lines.push(&ql[2..]);
                 } else if ql == ">" {
@@ -588,6 +599,133 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
 
 // MARK: - Line splitting
 
+fn quote_prefix(text: &str) -> (usize, u32) {
+    let mut offset = 0;
+    let mut depth = 0;
+    loop {
+        let spaces = text[offset..].bytes().take_while(|b| *b == b' ').count();
+        if spaces > 3 || text.as_bytes().get(offset + spaces) != Some(&b'>') {
+            break;
+        }
+        offset += spaces + 1;
+        if text.as_bytes().get(offset) == Some(&b' ') {
+            offset += 1;
+        }
+        depth += 1;
+    }
+    (offset, depth)
+}
+
+fn quoted_math_start(text: &str) -> Option<(usize, u32)> {
+    let (offset, depth) = quote_prefix(text);
+    if depth == 0 {
+        return None;
+    }
+    let content = text[offset..].trim_start_matches(' ');
+    if text[offset..].len() - content.len() > 3 {
+        return None;
+    }
+    let is_math_fence = opening_fence(content).is_some_and(|(_, _, info)| {
+        info.split_whitespace().next().is_some_and(|word| {
+            ["math", "latex", "tex"]
+                .iter()
+                .any(|language| word.eq_ignore_ascii_case(language))
+        })
+    });
+    (content.starts_with("$$") || is_math_fence).then_some((offset, depth))
+}
+
+fn quoted_math(
+    lines: &[Line<'_>],
+    start: usize,
+    source: &[u8],
+    map: &Utf16Map,
+) -> Option<(BlockKind, usize)> {
+    let (offset, depth) = quoted_math_start(lines[start].text)?;
+    let first = &lines[start].text[offset..];
+    let fence = opening_fence(first.trim());
+    let mut logical = Vec::new();
+    for (index, line) in lines.iter().enumerate().skip(start) {
+        let (prefix, line_depth) = quote_prefix(line.text);
+        if line_depth != depth {
+            break;
+        }
+        let content = &line.text[prefix..];
+        logical.push(Line {
+            text: content,
+            byte_start: line.byte_start + prefix,
+            byte_end: line.byte_end,
+        });
+        if index == start && fence.is_none() && first.trim() != "$$" {
+            break;
+        }
+        if index > start {
+            let closes = match fence {
+                Some((marker, length, _)) => closing_fence(content, marker, length),
+                None => content.trim() == "$$" || content.trim().is_empty(),
+            };
+            if closes {
+                break;
+            }
+        }
+    }
+    let (expression, content_start, content_end, consumed, syntax, info_string) =
+        if let Some((marker, length, info)) = fence {
+            let closed = logical.len() > 1 && closing_fence(logical.last()?.text, marker, length);
+            let end = logical.len() - usize::from(closed);
+            let content = &logical[1..end];
+            let indent = first.len() - first.trim_start_matches(' ').len();
+            let expression = content
+                .iter()
+                .map(|line| {
+                    let removable = line
+                        .text
+                        .bytes()
+                        .take(indent)
+                        .take_while(|b| *b == b' ')
+                        .count();
+                    &line.text[removable..]
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let content_start = content
+                .first()
+                .map_or(lines[start].byte_end, |line| line.byte_start);
+            let content_end = content
+                .last()
+                .map_or(content_start, |line| line.byte_start + line.text.len());
+            (
+                expression,
+                content_start,
+                content_end,
+                logical.len(),
+                MathSyntax::Fence,
+                Some(info.to_owned()),
+            )
+        } else {
+            let (expression, content_start, content_end, consumed) = dollar_math(&logical, 0)?;
+            (
+                expression,
+                content_start,
+                content_end,
+                consumed,
+                MathSyntax::Dollars,
+                None,
+            )
+        };
+    Some((
+        BlockKind::Math {
+            expression,
+            syntax,
+            quote_depth: depth,
+            info_string,
+            content_utf16_start: map.byte_to_utf16(content_start as u32, source),
+            content_utf16_end: map.byte_to_utf16(content_end as u32, source),
+        },
+        start + consumed,
+    ))
+}
+
 fn opening_fence(text: &str) -> Option<(u8, usize, &str)> {
     let marker = *text.as_bytes().first()?;
     if !matches!(marker, b'`' | b'~') {
@@ -645,16 +783,11 @@ fn dollar_math(lines: &[Line<'_>], start: usize) -> Option<(String, usize, usize
             return None;
         }
         if line.text.trim() == "$$" {
-            if expression.is_empty() {
+            let indent = line.text.len() - line.text.trim_start_matches(' ').len();
+            if expression.is_empty() || indent > 3 || line.text.starts_with('\t') {
                 return None;
             }
             return Some((expression.join("\n"), content_start, content_end, index + 1));
-        }
-        if line.text.starts_with('>')
-            || opening_fence(line.text.trim()).is_some()
-            || parse_list_marker(line.text).is_some()
-        {
-            return None;
         }
         expression.push(line.text);
         content_end = line.byte_start + line.text.len();

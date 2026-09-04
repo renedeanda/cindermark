@@ -15,6 +15,9 @@ delimiters; full ranges retain them. No Unicode normalization is performed.
 Block expression strings omit structural fences and ordinary fence indentation;
 their line separators are LF. Use original source ranges, not these derived
 strings, for lossless copy, edits and export, including CRLF preservation.
+Quoted math reports `quote_depth` (`quoteDepth` in WASM). Its content range is
+the source envelope, including intervening quote prefixes; its expression
+omits those prefixes. Full block ranges retain every source character.
 
 Table cells retain the existing header/row strings and additionally expose
 inline spans and source ranges. Row zero is the header; row one is the first
@@ -45,6 +48,9 @@ expand macros, execute code or load resources.
 - A standalone `$$…$$` line or matching `$$` delimiter lines produce display
   math. Blank lines terminate recognition; unclosed dollar blocks remain raw.
   Ordinary opening indentation is limited to three spaces.
+- Explicitly prefixed blockquotes support dollar and fenced math, including
+  nested quote depth. Recognition stops at the enclosing quote boundary;
+  unclosed dollar forms remain literal, while fences end at that boundary.
 - Fences classify the first info-string word, case-insensitively: `math`,
   `latex` or `tex`. The full info string is retained. Backtick and tilde fences
   require at least three identical characters; closing fences use the same
@@ -70,11 +76,12 @@ adding math syntax/content metadata and `tableCells`.
 ## Known deviations and outstanding development gates
 
 - Lists remain column-based rather than a complete CommonMark container tree.
-  Display/fenced math in list and blockquote containers is not complete yet.
+  List/compound list-and-quote math and lazy quote continuations remain open.
 - Bare CR line splitting, NUL replacement and general HTML-block semantics do
   not yet constitute CommonMark conformance.
-- Legacy preview helpers are not yet a complete semantic rendering interface
-  for display math. Consumers must not use them to serialize source.
+- Previews preserve readable math delimiters and opaque expressions; display
+  forms use a dollar-block fallback. Preview text is derived, not lossless
+  source serialization. Formatting does not pair across separate block parts.
 - Current compatibility fixtures are original test inputs, not an authenticated
   Apple Notes export bundle. Real export-package compatibility remains a gate.
 

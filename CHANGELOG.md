@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conformance from the CommonMark baseline.
 
 ### Fixed
+- Preview formatting no longer pairs across separate blocks; math keeps readable
+  fallback and truncated spans stay within surrogate-safe text bounds.
+- Dollar-math closing indentation is bounded, and TeX body lines remain opaque.
 - Configured attachment markers now interrupt adjacent paragraphs without requiring blank lines.
 
 ## [0.2.0] - 2026-07-22

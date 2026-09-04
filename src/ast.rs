@@ -75,6 +75,7 @@ pub enum BlockKind {
     Math {
         expression: String,
         syntax: MathSyntax,
+        quote_depth: u32,
         info_string: Option<String>,
         content_utf16_start: u32,
         content_utf16_end: u32,

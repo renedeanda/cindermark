@@ -51,6 +51,7 @@ pub enum FfiBlockType {
     },
     Math {
         syntax: u8,
+        quote_depth: u32,
         content_utf16_start: u32,
         content_utf16_end: u32,
     },
@@ -275,12 +276,14 @@ fn convert_block(block: &BlockNode) -> FfiBlock {
         BlockKind::Math {
             expression,
             syntax,
+            quote_depth,
             info_string,
             content_utf16_start,
             content_utf16_end,
         } => (
             FfiBlockType::Math {
                 syntax: *syntax as u8,
+                quote_depth: *quote_depth,
                 content_utf16_start: *content_utf16_start,
                 content_utf16_end: *content_utf16_end,
             },
@@ -1114,14 +1117,7 @@ struct CleanPreview {
     clean_spans: Vec<FfiPreviewSpan>,
 }
 
-/// Build a rich preview from markdown text (the expensive shared work):
-///
-/// 1. Parse the document to get block structure
-/// 2. Build raw preview text from block contents (block markers stripped, inline markers kept)
-/// 3. Re-parse inline spans on the preview text
-/// 4. Strip inline markers and remap span positions
-///
-/// Truncation to specific lengths is cheap on top of this result.
+/// Build derived preview text and ranges; never use this as source serialization.
 fn build_clean_preview(
     text: &str,
     approx_limit: usize,
@@ -1132,8 +1128,8 @@ fn build_clean_preview(
 }
 
 fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<CleanPreview> {
-    // Step 1: Build raw preview from block texts (inline markers kept, block markers stripped)
     let mut raw_parts: Vec<String> = Vec::new();
+    let mut math_parts = std::collections::HashMap::new();
     let mut approx_len: usize = 0;
 
     for block in &doc.blocks {
@@ -1142,6 +1138,12 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
         }
 
         match &block.kind {
+            BlockKind::Math { expression, .. } => {
+                math_parts.insert(raw_parts.len(), expression.clone());
+                let text = format!("$$\n{expression}\n$$");
+                approx_len += text.len();
+                raw_parts.push(text);
+            }
             BlockKind::Heading { text, .. }
             | BlockKind::Paragraph { text }
             | BlockKind::Blockquote { text } => {
@@ -1197,19 +1199,45 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
         return None;
     }
 
-    // Step 2: Join parts with newline separators so blocks appear on separate lines in previews
     let raw_preview = raw_parts.join("\n");
 
-    // Step 3: Parse inline spans on the raw preview text
+    // Separate parts must not pair delimiters across original block boundaries.
     let preview_bytes = raw_preview.as_bytes();
     let preview_utf16_map = utf16::Utf16Map::build(preview_bytes);
-    let inline_spans = inline::parse_spans(preview_bytes, 0, preview_bytes, &preview_utf16_map);
+    let mut inline_spans = Vec::new();
+    let mut byte_offset = 0;
+    for (index, part) in raw_parts.iter().enumerate() {
+        if let Some(expression) = math_parts.get(&index) {
+            let start = preview_utf16_map.byte_to_utf16(byte_offset as u32, preview_bytes);
+            let end =
+                preview_utf16_map.byte_to_utf16((byte_offset + part.len()) as u32, preview_bytes);
+            inline_spans.push(InlineSpan {
+                kind: InlineKind::Math {
+                    expression: expression.clone(),
+                },
+                utf16_start: start,
+                utf16_end: end,
+                content_utf16_start: start,
+                content_utf16_end: end,
+            });
+        } else {
+            inline_spans.extend(inline::parse_spans(
+                part.as_bytes(),
+                byte_offset,
+                preview_bytes,
+                &preview_utf16_map,
+            ));
+        }
+        byte_offset += part.len() + 1;
+    }
 
-    // Step 4: Strip inline markers
     let preview_utf16_len = preview_utf16_map.total_utf16_len as usize;
     let mut is_marker = vec![false; preview_utf16_len];
 
     for span in &inline_spans {
+        if matches!(span.kind, InlineKind::Math { .. }) {
+            continue;
+        }
         // Hidden comments are stripped in their entirety from preview — mark
         // the full span so neither the `%%` fences nor the body surface.
         if matches!(span.kind, InlineKind::Comment) {
@@ -1232,7 +1260,6 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
         }
     }
 
-    // Build clean text with position mapping
     let mut clean_text = String::new();
     let mut clean_utf16_pos: u32 = 0;
     let mut input_utf16_pos: u32 = 0;
@@ -1262,11 +1289,16 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
         position_map[end_idx] = clean_utf16_pos;
     }
 
-    // Step 5: Remap inline spans to clean text positions
     let mut clean_spans: Vec<FfiPreviewSpan> = Vec::new();
     for span in &inline_spans {
-        let cs = span.content_utf16_start as usize;
-        let ce = span.content_utf16_end as usize;
+        let (cs, ce) = if matches!(span.kind, InlineKind::Math { .. }) {
+            (span.utf16_start as usize, span.utf16_end as usize)
+        } else {
+            (
+                span.content_utf16_start as usize,
+                span.content_utf16_end as usize,
+            )
+        };
 
         if cs < position_map.len() && ce <= position_map.len() {
             let mapped_start = position_map[cs];
@@ -1312,16 +1344,20 @@ fn truncate_preview(preview: &CleanPreview, max_chars: u32) -> FfiRenderedPrevie
         byte_end = i + ch.len_utf8();
     }
     let truncated_text = preview.clean_text[..byte_end].to_string();
+    let truncated_length = truncated_text.encode_utf16().count() as u32;
 
     let mut truncated_spans: Vec<FfiPreviewSpan> = preview
         .clean_spans
         .iter()
-        .filter(|s| s.start < max_chars)
+        .filter(|s| {
+            s.start < truncated_length
+                && (!matches!(s.span_type, FfiInlineType::Math { .. }) || s.end <= truncated_length)
+        })
         .cloned()
         .collect();
     for span in &mut truncated_spans {
-        if span.end > max_chars {
-            span.end = max_chars;
+        if span.end > truncated_length {
+            span.end = truncated_length;
         }
     }
 

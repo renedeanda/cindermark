@@ -117,6 +117,7 @@ fn push_blocks(out: &mut String, blocks: &[FfiBlock]) {
         match &block.block_type {
             FfiBlockType::Math {
                 syntax,
+                quote_depth,
                 content_utf16_start,
                 content_utf16_end,
             } => {
@@ -128,6 +129,8 @@ fn push_blocks(out: &mut String, blocks: &[FfiBlock]) {
                 push_u32(out, *content_utf16_start);
                 out.push_str(",\"contentEnd\":");
                 push_u32(out, *content_utf16_end);
+                out.push_str(",\"quoteDepth\":");
+                push_u32(out, *quote_depth);
             }
             FfiBlockType::Heading => {
                 out.push_str(",\"level\":");
@@ -357,5 +360,7 @@ mod tests {
         assert!(json.contains("\"tableCells\":[{\"row\":0,\"column\":0"));
         assert!(json.contains("\"syntax\":\"plus\""));
         assert!(json.contains("\"expression\":\"\\\\alpha\""));
+        let quoted = parser.parse_json("> $$x$$".into());
+        assert!(quoted.contains("\"quoteDepth\":1"));
     }
 }
