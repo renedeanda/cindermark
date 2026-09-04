@@ -724,6 +724,7 @@ public func FfiConverterTypeCindermarkParser_lower(_ value: CindermarkParser) ->
 
 
 public struct FfiBlock {
+    public let tableCells: [FfiTableCell]
     public let blockType: FfiBlockType
     public let lineStart: UInt32
     public let lineEnd: UInt32
@@ -749,7 +750,8 @@ public struct FfiBlock {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(blockType: FfiBlockType, lineStart: UInt32, lineEnd: UInt32, utf16Start: UInt32, utf16End: UInt32, listIndent: UInt32, markerUtf16Start: UInt32, markerUtf16End: UInt32, markerSource: String, unorderedMarker: String, orderedDelimiter: String, orderedRawNumber: String, headingLevel: UInt8, number: UInt32, isChecked: Bool, language: String?, text: String, inlineSpans: [FfiInlineSpan], listItems: [FfiListItem], tableHeaders: [String], tableRows: [[String]], tableAlignments: [UInt8]) {
+    public init(tableCells: [FfiTableCell], blockType: FfiBlockType, lineStart: UInt32, lineEnd: UInt32, utf16Start: UInt32, utf16End: UInt32, listIndent: UInt32, markerUtf16Start: UInt32, markerUtf16End: UInt32, markerSource: String, unorderedMarker: String, orderedDelimiter: String, orderedRawNumber: String, headingLevel: UInt8, number: UInt32, isChecked: Bool, language: String?, text: String, inlineSpans: [FfiInlineSpan], listItems: [FfiListItem], tableHeaders: [String], tableRows: [[String]], tableAlignments: [UInt8]) {
+        self.tableCells = tableCells
         self.blockType = blockType
         self.lineStart = lineStart
         self.lineEnd = lineEnd
@@ -779,6 +781,9 @@ public struct FfiBlock {
 
 extension FfiBlock: Equatable, Hashable {
     public static func ==(lhs: FfiBlock, rhs: FfiBlock) -> Bool {
+        if lhs.tableCells != rhs.tableCells {
+            return false
+        }
         if lhs.blockType != rhs.blockType {
             return false
         }
@@ -849,6 +854,7 @@ extension FfiBlock: Equatable, Hashable {
     }
 
     public func hash(into hasher: inout Hasher) {
+        hasher.combine(tableCells)
         hasher.combine(blockType)
         hasher.combine(lineStart)
         hasher.combine(lineEnd)
@@ -882,6 +888,7 @@ public struct FfiConverterTypeFfiBlock: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiBlock {
         return
             try FfiBlock(
+                tableCells: FfiConverterSequenceTypeFfiTableCell.read(from: &buf), 
                 blockType: FfiConverterTypeFfiBlockType.read(from: &buf), 
                 lineStart: FfiConverterUInt32.read(from: &buf), 
                 lineEnd: FfiConverterUInt32.read(from: &buf), 
@@ -908,6 +915,7 @@ public struct FfiConverterTypeFfiBlock: FfiConverterRustBuffer {
     }
 
     public static func write(_ value: FfiBlock, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeFfiTableCell.write(value.tableCells, into: &buf)
         FfiConverterTypeFfiBlockType.write(value.blockType, into: &buf)
         FfiConverterUInt32.write(value.lineStart, into: &buf)
         FfiConverterUInt32.write(value.lineEnd, into: &buf)
@@ -1824,6 +1832,96 @@ public func FfiConverterTypeFfiSaveParseResult_lower(_ value: FfiSaveParseResult
     return FfiConverterTypeFfiSaveParseResult.lower(value)
 }
 
+
+public struct FfiTableCell {
+    public let row: UInt32
+    public let column: UInt32
+    public let utf16Start: UInt32
+    public let utf16End: UInt32
+    public let inlineSpans: [FfiInlineSpan]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(row: UInt32, column: UInt32, utf16Start: UInt32, utf16End: UInt32, inlineSpans: [FfiInlineSpan]) {
+        self.row = row
+        self.column = column
+        self.utf16Start = utf16Start
+        self.utf16End = utf16End
+        self.inlineSpans = inlineSpans
+    }
+}
+
+
+
+extension FfiTableCell: Equatable, Hashable {
+    public static func ==(lhs: FfiTableCell, rhs: FfiTableCell) -> Bool {
+        if lhs.row != rhs.row {
+            return false
+        }
+        if lhs.column != rhs.column {
+            return false
+        }
+        if lhs.utf16Start != rhs.utf16Start {
+            return false
+        }
+        if lhs.utf16End != rhs.utf16End {
+            return false
+        }
+        if lhs.inlineSpans != rhs.inlineSpans {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(row)
+        hasher.combine(column)
+        hasher.combine(utf16Start)
+        hasher.combine(utf16End)
+        hasher.combine(inlineSpans)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTableCell: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTableCell {
+        return
+            try FfiTableCell(
+                row: FfiConverterUInt32.read(from: &buf), 
+                column: FfiConverterUInt32.read(from: &buf), 
+                utf16Start: FfiConverterUInt32.read(from: &buf), 
+                utf16End: FfiConverterUInt32.read(from: &buf), 
+                inlineSpans: FfiConverterSequenceTypeFfiInlineSpan.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTableCell, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.row, into: &buf)
+        FfiConverterUInt32.write(value.column, into: &buf)
+        FfiConverterUInt32.write(value.utf16Start, into: &buf)
+        FfiConverterUInt32.write(value.utf16End, into: &buf)
+        FfiConverterSequenceTypeFfiInlineSpan.write(value.inlineSpans, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTableCell_lift(_ buf: RustBuffer) throws -> FfiTableCell {
+    return try FfiConverterTypeFfiTableCell.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTableCell_lower(_ value: FfiTableCell) -> RustBuffer {
+    return FfiConverterTypeFfiTableCell.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -1846,6 +1944,8 @@ public enum FfiBlockType {
     case callout(kind: UInt8
     )
     case mermaidDiagram(diagramType: UInt8
+    )
+    case math(syntax: UInt8, quoteDepth: UInt32, contentUtf16Start: UInt32, contentUtf16End: UInt32
     )
 }
 
@@ -1892,6 +1992,9 @@ public struct FfiConverterTypeFfiBlockType: FfiConverterRustBuffer {
         )
         
         case 16: return .mermaidDiagram(diagramType: try FfiConverterUInt8.read(from: &buf)
+        )
+        
+        case 17: return .math(syntax: try FfiConverterUInt8.read(from: &buf), quoteDepth: try FfiConverterUInt32.read(from: &buf), contentUtf16Start: try FfiConverterUInt32.read(from: &buf), contentUtf16End: try FfiConverterUInt32.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -1967,6 +2070,14 @@ public struct FfiConverterTypeFfiBlockType: FfiConverterRustBuffer {
             writeInt(&buf, Int32(16))
             FfiConverterUInt8.write(diagramType, into: &buf)
             
+        
+        case let .math(syntax,quoteDepth,contentUtf16Start,contentUtf16End):
+            writeInt(&buf, Int32(17))
+            FfiConverterUInt8.write(syntax, into: &buf)
+            FfiConverterUInt32.write(quoteDepth, into: &buf)
+            FfiConverterUInt32.write(contentUtf16Start, into: &buf)
+            FfiConverterUInt32.write(contentUtf16End, into: &buf)
+            
         }
     }
 }
@@ -2018,6 +2129,9 @@ public enum FfiInlineType {
     case comment
     case hexColor(hex: String
     )
+    case underlinePlus
+    case math(expression: String
+    )
 }
 
 
@@ -2066,6 +2180,11 @@ public struct FfiConverterTypeFfiInlineType: FfiConverterRustBuffer {
         case 15: return .comment
         
         case 16: return .hexColor(hex: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 17: return .underlinePlus
+        
+        case 18: return .math(expression: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -2143,6 +2262,15 @@ public struct FfiConverterTypeFfiInlineType: FfiConverterRustBuffer {
         case let .hexColor(hex):
             writeInt(&buf, Int32(16))
             FfiConverterString.write(hex, into: &buf)
+            
+        
+        case .underlinePlus:
+            writeInt(&buf, Int32(17))
+        
+        
+        case let .math(expression):
+            writeInt(&buf, Int32(18))
+            FfiConverterString.write(expression, into: &buf)
             
         }
     }
@@ -2388,6 +2516,31 @@ fileprivate struct FfiConverterSequenceTypeFfiRenderedPreview: FfiConverterRustB
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeFfiRenderedPreview.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiTableCell: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiTableCell]
+
+    public static func write(_ value: [FfiTableCell], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiTableCell.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiTableCell] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiTableCell]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiTableCell.read(from: &buf))
         }
         return seq
     }
