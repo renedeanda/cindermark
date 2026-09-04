@@ -167,40 +167,58 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             continue;
         }
 
-        // Fenced code block
-        if trimmed.starts_with("```") {
+        if let Some((expression, content_start, content_end, end_line)) = dollar_math(&lines, i) {
+            blocks.push(make_block(
+                BlockKind::Math {
+                    expression,
+                    syntax: MathSyntax::Dollars,
+                    info_string: None,
+                    content_utf16_start: utf16_map.byte_to_utf16(content_start as u32, bytes),
+                    content_utf16_end: utf16_map.byte_to_utf16(content_end as u32, bytes),
+                },
+                &lines,
+                i,
+                end_line,
+                bytes,
+                &utf16_map,
+            ));
+            i = end_line;
+            continue;
+        }
+
+        if let Some((fence_char, fence_len, info)) = opening_fence(trimmed) {
             let start_line = i;
-            let language = {
-                let after_fence = trimmed[3..].trim();
-                if after_fence.is_empty() {
-                    None
-                } else {
-                    // Take first word only (CommonMark: info string's first word is the language)
-                    Some(
-                        after_fence
-                            .split_whitespace()
-                            .next()
-                            .unwrap_or(after_fence)
-                            .to_string(),
-                    )
-                }
-            };
+            let language = info.split_whitespace().next().map(str::to_owned);
+            let indent = line.text.len() - line.text.trim_start_matches(' ').len();
             let mut code_lines: Vec<&str> = Vec::new();
             i += 1;
+            let content_start = lines.get(i).map_or(line.byte_end, |line| line.byte_start);
+            let mut content_end = content_start;
             while i < lines.len() {
-                let cl = lines[i].text.trim();
-                if cl.starts_with("```") {
+                let cl = lines[i].text;
+                if closing_fence(cl, fence_char, fence_len) {
                     i += 1;
                     break;
                 }
-                code_lines.push(lines[i].text);
+                let removable = cl.bytes().take(indent).take_while(|b| *b == b' ').count();
+                code_lines.push(&cl[removable..]);
+                content_end = lines[i].byte_start + cl.len();
                 i += 1;
             }
             let code = code_lines.join("\n");
-            // Route ```mermaid fences into a dedicated block kind so Swift
-            // can render the diagram instead of a code tile. Detection is
-            // case-insensitive to tolerate `Mermaid` / `MERMAID`.
-            let kind = if language.as_deref().is_some_and(is_mermaid_info_string) {
+            let kind = if language.as_deref().is_some_and(|language| {
+                ["math", "latex", "tex"]
+                    .iter()
+                    .any(|kind| language.eq_ignore_ascii_case(kind))
+            }) {
+                BlockKind::Math {
+                    expression: code,
+                    syntax: MathSyntax::Fence,
+                    info_string: Some(info.to_owned()),
+                    content_utf16_start: utf16_map.byte_to_utf16(content_start as u32, bytes),
+                    content_utf16_end: utf16_map.byte_to_utf16(content_end as u32, bytes),
+                }
+            } else if language.as_deref().is_some_and(is_mermaid_info_string) {
                 BlockKind::MermaidDiagram {
                     diagram_type: MermaidDiagramType::from_source(&code),
                     source: code,
@@ -501,7 +519,8 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             let pl = lines[i].text;
             let pt = pl.trim();
             if pt.is_empty()
-                || pt.starts_with("```")
+                || opening_fence(pt).is_some()
+                || (i > start_line && pt.starts_with("$$"))
                 || is_heading_line(pt)
                 || pt.starts_with("> ")
                 || is_horizontal_rule(pt)
@@ -568,6 +587,80 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
 }
 
 // MARK: - Line splitting
+
+fn opening_fence(text: &str) -> Option<(u8, usize, &str)> {
+    let marker = *text.as_bytes().first()?;
+    if !matches!(marker, b'`' | b'~') {
+        return None;
+    }
+    let length = text.bytes().take_while(|b| *b == marker).count();
+    if length < 3 {
+        return None;
+    }
+    let info = text[length..].trim();
+    if marker == b'`' && info.contains('`') {
+        return None;
+    }
+    Some((marker, length, info))
+}
+
+fn closing_fence(text: &str, marker: u8, minimum: usize) -> bool {
+    let trimmed = text.trim_start_matches(' ');
+    if text.len() - trimmed.len() > 3 {
+        return false;
+    }
+    let length = trimmed.bytes().take_while(|b| *b == marker).count();
+    length >= minimum && trimmed[length..].bytes().all(|b| matches!(b, b' ' | b'\t'))
+}
+
+fn dollar_math(lines: &[Line<'_>], start: usize) -> Option<(String, usize, usize, usize)> {
+    let line = &lines[start];
+    let text = line.text.trim_start_matches(' ');
+    let indent = line.text.len() - text.len();
+    if indent > 3 || !text.starts_with("$$") || text.starts_with("$$$") {
+        return None;
+    }
+    let trimmed = text.trim_end();
+    if trimmed.len() > 4 && trimmed.ends_with("$$") && !trimmed.ends_with("$$$") {
+        let expression = &trimmed[2..trimmed.len() - 2];
+        if expression.trim().is_empty() || expression.contains("$$") {
+            return None;
+        }
+        let content_start = line.byte_start + indent + 2;
+        return Some((
+            expression.into(),
+            content_start,
+            content_start + expression.len(),
+            start + 1,
+        ));
+    }
+    if trimmed != "$$" {
+        return None;
+    }
+    let mut expression = Vec::new();
+    let content_start = lines.get(start + 1)?.byte_start;
+    let mut content_end = content_start;
+    for (index, line) in lines.iter().enumerate().skip(start + 1) {
+        if line.text.trim().is_empty() {
+            return None;
+        }
+        if line.text.trim() == "$$" {
+            if expression.is_empty() {
+                return None;
+            }
+            return Some((expression.join("\n"), content_start, content_end, index + 1));
+        }
+        if line.text.starts_with('>')
+            || opening_fence(line.text.trim()).is_some()
+            || parse_list_marker(line.text).is_some()
+        {
+            return None;
+        }
+        expression.push(line.text);
+        content_end = line.byte_start + line.text.len();
+    }
+    None
+}
 
 /// A line with its byte range in the source.
 struct Line<'a> {
@@ -675,6 +768,7 @@ fn make_block_with_optional_marker(
         byte_end,
         list_marker,
         inline_spans: Vec::new(),
+        table_cells: Vec::new(),
     }
 }
 
@@ -1118,14 +1212,37 @@ fn is_table_separator(line: &str) -> bool {
 }
 
 fn parse_table_row(line: &str) -> Vec<String> {
-    let mut cells: Vec<String> = line.split('|').map(|s| s.trim().to_string()).collect();
-    if cells.first().is_some_and(|s| s.is_empty()) {
-        cells.remove(0);
+    table_cell_ranges(line)
+        .into_iter()
+        .map(|range| line[range].to_owned())
+        .collect()
+}
+
+pub(crate) fn table_cell_ranges(line: &str) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut backslashes = 0;
+    for (index, byte) in line.bytes().enumerate() {
+        if byte == b'|' && backslashes % 2 == 0 {
+            ranges.push(start..index);
+            start = index + 1;
+        }
+        backslashes = if byte == b'\\' { backslashes + 1 } else { 0 };
     }
-    if cells.last().is_some_and(|s| s.is_empty()) {
-        cells.pop();
+    ranges.push(start..line.len());
+    for range in &mut ranges {
+        let cell = &line[range.clone()];
+        let leading = cell.len() - cell.trim_start().len();
+        range.start += leading;
+        range.end = range.start + cell.trim().len();
     }
-    cells
+    if ranges.first().is_some_and(std::ops::Range::is_empty) {
+        ranges.remove(0);
+    }
+    if ranges.last().is_some_and(std::ops::Range::is_empty) {
+        ranges.pop();
+    }
+    ranges
 }
 
 fn parse_alignments(separator: &str) -> Vec<ColumnAlignment> {
@@ -1159,12 +1276,27 @@ fn parse_alignments(separator: &str) -> Vec<ColumnAlignment> {
 
 /// Extract wiki link titles from content (skipping code blocks).
 pub fn extract_wiki_links(content: &str) -> Vec<String> {
-    let without_code = strip_code_blocks(content);
-    parse_inline_segments(&without_code)
-        .into_iter()
-        .filter_map(|seg| match seg {
-            InlineSegment::WikiLink(title) => Some(title),
-            _ => None,
+    let doc = parse(content, ParseMode::Editable);
+    let utf16: Vec<_> = content.encode_utf16().collect();
+    doc.blocks
+        .iter()
+        .flat_map(|block| {
+            block.inline_spans.iter().chain(
+                block
+                    .table_cells
+                    .iter()
+                    .flat_map(|cell| cell.inline_spans.iter()),
+            )
+        })
+        .filter_map(|span| {
+            if !matches!(span.kind, InlineKind::WikiLink) {
+                return None;
+            }
+            let body = String::from_utf16_lossy(
+                &utf16[span.utf16_start as usize + 2..span.utf16_end as usize - 2],
+            );
+            let title = body.split('|').next().unwrap_or("").trim();
+            (!title.is_empty()).then(|| title.to_owned())
         })
         .collect()
 }
@@ -1211,76 +1343,6 @@ pub fn toggle_checkbox(content: &str, line_index: u32) -> String {
     let mut result: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
     result[idx] = new_line;
     result.join("\n")
-}
-
-// MARK: - Inline segments (for wiki link extraction)
-
-enum InlineSegment {
-    #[allow(dead_code)]
-    Text(String),
-    WikiLink(String),
-}
-
-fn parse_inline_segments(text: &str) -> Vec<InlineSegment> {
-    let mut segments = Vec::new();
-    let mut remaining = text;
-
-    while let Some(open_pos) = remaining.find("[[") {
-        let before = &remaining[..open_pos];
-        if !before.is_empty() {
-            segments.push(InlineSegment::Text(before.to_string()));
-        }
-        let after_open = &remaining[open_pos + 2..];
-        if let Some(close_pos) = after_open.find("]]") {
-            let body = &after_open[..close_pos];
-            // Aliased form `[[target|Display]]` — the target for backlinks is
-            // the pre-pipe portion; the display text is rendered inline only.
-            let target = body.split('|').next().unwrap_or(body).trim().to_string();
-            if !target.is_empty() {
-                segments.push(InlineSegment::WikiLink(target));
-            } else {
-                segments.push(InlineSegment::Text("[[]]".to_string()));
-            }
-            remaining = &after_open[close_pos + 2..];
-        } else {
-            segments.push(InlineSegment::Text(remaining[open_pos..].to_string()));
-            remaining = "";
-        }
-    }
-
-    if !remaining.is_empty() {
-        segments.push(InlineSegment::Text(remaining.to_string()));
-    }
-
-    segments
-}
-
-fn strip_code_blocks(text: &str) -> String {
-    let mut result = String::new();
-    let mut in_code_block = false;
-
-    for line in text.lines() {
-        if line.trim().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if !in_code_block {
-            // Strip inline code spans
-            let mut cleaned = String::new();
-            let mut in_inline_code = false;
-            for ch in line.chars() {
-                if ch == '`' {
-                    in_inline_code = !in_inline_code;
-                } else if !in_inline_code {
-                    cleaned.push(ch);
-                }
-            }
-            result.push_str(&cleaned);
-            result.push('\n');
-        }
-    }
-
-    result
 }
 
 #[cfg(test)]

@@ -29,14 +29,14 @@ impl WasmParser {
         }
     }
 
-    /// Full editable parse. JSON: `{"blocks":[…],"lineCount":n,"stats":{…}}`.
+    /// Full editable parse with `schema_version: 2`, blocks, line count and stats.
     /// Also primes the incremental snapshot, so `keystroke` calls that follow
     /// re-parse only the dirty block window.
     #[wasm_bindgen(js_name = parseJson)]
     pub fn parse_json(&self, text: String) -> String {
         let result = self.inner.parse_editable(text);
         let mut out = String::with_capacity(result.blocks.len() * 96 + 256);
-        out.push_str("{\"blocks\":[");
+        out.push_str("{\"schema_version\":2,\"blocks\":[");
         push_blocks(&mut out, &result.blocks);
         out.push_str("],\"lineCount\":");
         push_u32(&mut out, result.line_count);
@@ -74,7 +74,7 @@ impl WasmParser {
             edit_new_utf16_len,
         );
         let mut out = String::with_capacity(96);
-        out.push_str("{\"dirtyStart\":");
+        out.push_str("{\"schema_version\":2,\"dirtyStart\":");
         push_u32(&mut out, update.dirty_start);
         out.push_str(",\"dirtyEnd\":");
         push_u32(&mut out, update.dirty_end);
@@ -115,6 +115,20 @@ fn push_blocks(out: &mut String, blocks: &[FfiBlock]) {
         out.push_str(block_type_name(&block.block_type));
         out.push('"');
         match &block.block_type {
+            FfiBlockType::Math {
+                syntax,
+                content_utf16_start,
+                content_utf16_end,
+            } => {
+                out.push_str(",\"syntax\":");
+                push_json_string(out, if *syntax == 0 { "dollars" } else { "fence" });
+                out.push_str(",\"expression\":");
+                push_json_string(out, &block.text);
+                out.push_str(",\"contentStart\":");
+                push_u32(out, *content_utf16_start);
+                out.push_str(",\"contentEnd\":");
+                push_u32(out, *content_utf16_end);
+            }
             FfiBlockType::Heading => {
                 out.push_str(",\"level\":");
                 push_u32(out, u32::from(block.heading_level));
@@ -155,6 +169,23 @@ fn push_blocks(out: &mut String, blocks: &[FfiBlock]) {
         push_u32(out, block.list_indent);
         out.push_str(",\"spans\":[");
         push_spans(out, &block.inline_spans);
+        out.push_str("],\"tableCells\":[");
+        for (index, cell) in block.table_cells.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"row\":");
+            push_u32(out, cell.row);
+            out.push_str(",\"column\":");
+            push_u32(out, cell.column);
+            out.push_str(",\"start\":");
+            push_u32(out, cell.utf16_start);
+            out.push_str(",\"end\":");
+            push_u32(out, cell.utf16_end);
+            out.push_str(",\"spans\":[");
+            push_spans(out, &cell.inline_spans);
+            out.push_str("]}");
+        }
         out.push_str("]}");
     }
 }
@@ -168,6 +199,12 @@ fn push_spans(out: &mut String, spans: &[FfiInlineSpan]) {
         out.push_str(inline_type_name(&span.inline_type));
         out.push('"');
         match &span.inline_type {
+            FfiInlineType::Math { expression } => {
+                out.push_str(",\"expression\":");
+                push_json_string(out, expression);
+                out.push_str(",\"syntax\":\"dollars\"");
+            }
+            FfiInlineType::UnderlinePlus => out.push_str(",\"syntax\":\"plus\""),
             FfiInlineType::Link { url } | FfiInlineType::AutoLink { url } => {
                 out.push_str(",\"url\":");
                 push_json_string(out, url);
@@ -212,6 +249,7 @@ fn block_type_name(block_type: &FfiBlockType) -> &'static str {
         FfiBlockType::NumberedItem => "numberedItem",
         FfiBlockType::Callout { .. } => "callout",
         FfiBlockType::MermaidDiagram { .. } => "mermaid",
+        FfiBlockType::Math { .. } => "math",
     }
 }
 
@@ -221,7 +259,10 @@ fn inline_type_name(inline_type: &FfiInlineType) -> &'static str {
         FfiInlineType::Italic => "italic",
         FfiInlineType::BoldItalic => "boldItalic",
         FfiInlineType::Strikethrough => "strike",
-        FfiInlineType::UnderlineTilde | FfiInlineType::UnderlineHtml => "underline",
+        FfiInlineType::UnderlineTilde
+        | FfiInlineType::UnderlineHtml
+        | FfiInlineType::UnderlinePlus => "underline",
+        FfiInlineType::Math { .. } => "math",
         FfiInlineType::InlineCode => "code",
         FfiInlineType::Highlight
         | FfiInlineType::HighlightColor { .. }
@@ -281,7 +322,9 @@ mod tests {
     fn parse_json_shape_is_valid_and_typed() {
         let parser = WasmParser::new();
         let json = parser.parse_json("# Hi\n\nSome **bold** text.\n".to_string());
-        assert!(json.starts_with("{\"blocks\":[{\"type\":\"heading\",\"level\":1"));
+        assert!(
+            json.starts_with("{\"schema_version\":2,\"blocks\":[{\"type\":\"heading\",\"level\":1")
+        );
         assert!(json.contains("\"type\":\"bold\""));
         assert!(json.contains("\"stats\":{\"words\":"));
     }
@@ -302,5 +345,17 @@ mod tests {
         let mut out = String::new();
         push_json_string(&mut out, "a\"b\\c\nd");
         assert_eq!(out, "\"a\\\"b\\\\c\\nd\"");
+    }
+
+    #[test]
+    fn math_and_table_json_preserve_source_metadata() {
+        let parser = WasmParser::new();
+        let json = parser.parse_json("$$x$$\n\n| ++a++ | $\\alpha$ |\n| --- | --- |".into());
+        assert!(json.contains("\"schema_version\":2"));
+        assert!(json.contains("\"syntax\":\"dollars\""));
+        assert!(json.contains("\"expression\":\"x\""));
+        assert!(json.contains("\"tableCells\":[{\"row\":0,\"column\":0"));
+        assert!(json.contains("\"syntax\":\"plus\""));
+        assert!(json.contains("\"expression\":\"\\\\alpha\""));
     }
 }

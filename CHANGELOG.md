@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 0.3.0 development: plus-delimited underline and opaque inline/display/fenced
+  math, UTF-16 table-cell spans, and WASM schema version 2 metadata.
+- Source-range, malformed-input, Unicode and incremental-edit regression tests.
+
+### Changed
+- Source version is 0.3.0 because new exhaustive Rust/UniFFI enum variants and
+  record fields require consumer updates. No publication or tag is implied.
+- Backlink extraction uses parsed spans, including in table cells, so code and
+  math cannot create links from their literal content.
+- The compatibility profile explicitly distinguishes extensions and incomplete
+  conformance from the CommonMark baseline.
+
 ### Fixed
 - Configured attachment markers now interrupt adjacent paragraphs without requiring blank lines.
 

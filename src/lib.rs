@@ -49,6 +49,11 @@ pub enum FfiBlockType {
     MermaidDiagram {
         diagram_type: u8,
     },
+    Math {
+        syntax: u8,
+        content_utf16_start: u32,
+        content_utf16_end: u32,
+    },
 }
 
 /// Inline type enum for FFI.
@@ -70,6 +75,8 @@ pub enum FfiInlineType {
     FootnoteRef,
     Comment,
     HexColor { hex: String },
+    UnderlinePlus,
+    Math { expression: String },
 }
 
 /// An inline span for FFI transport.
@@ -89,9 +96,19 @@ pub struct FfiListItem {
     pub inline_spans: Vec<FfiInlineSpan>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FfiTableCell {
+    pub row: u32,
+    pub column: u32,
+    pub utf16_start: u32,
+    pub utf16_end: u32,
+    pub inline_spans: Vec<FfiInlineSpan>,
+}
+
 /// A block for FFI transport.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FfiBlock {
+    pub table_cells: Vec<FfiTableCell>,
     pub block_type: FfiBlockType,
     pub line_start: u32,
     pub line_end: u32,
@@ -218,6 +235,10 @@ fn convert_inline_span(span: &InlineSpan) -> FfiInlineSpan {
         InlineKind::Strikethrough => FfiInlineType::Strikethrough,
         InlineKind::UnderlineTilde => FfiInlineType::UnderlineTilde,
         InlineKind::UnderlineHtml => FfiInlineType::UnderlineHtml,
+        InlineKind::UnderlinePlus => FfiInlineType::UnderlinePlus,
+        InlineKind::Math { expression } => FfiInlineType::Math {
+            expression: expression.clone(),
+        },
         InlineKind::InlineCode => FfiInlineType::InlineCode,
         InlineKind::Highlight => FfiInlineType::Highlight,
         InlineKind::HighlightColor(idx) => FfiInlineType::HighlightColor { color_index: *idx },
@@ -251,6 +272,28 @@ fn convert_block(block: &BlockNode) -> FfiBlock {
         table_rows,
         table_alignments,
     ) = match &block.kind {
+        BlockKind::Math {
+            expression,
+            syntax,
+            info_string,
+            content_utf16_start,
+            content_utf16_end,
+        } => (
+            FfiBlockType::Math {
+                syntax: *syntax as u8,
+                content_utf16_start: *content_utf16_start,
+                content_utf16_end: *content_utf16_end,
+            },
+            0,
+            0,
+            false,
+            info_string.clone(),
+            expression.clone(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ),
         BlockKind::Heading { level, text } => (
             FfiBlockType::Heading,
             *level,
@@ -479,6 +522,17 @@ fn convert_block(block: &BlockNode) -> FfiBlock {
     };
 
     FfiBlock {
+        table_cells: block
+            .table_cells
+            .iter()
+            .map(|cell| FfiTableCell {
+                row: cell.row,
+                column: cell.column,
+                utf16_start: cell.utf16_start,
+                utf16_end: cell.utf16_end,
+                inline_spans: cell.inline_spans.iter().map(convert_inline_span).collect(),
+            })
+            .collect(),
         block_type,
         line_start: block.line_start,
         line_end: block.line_end,
@@ -681,34 +735,12 @@ fn extract_wiki_links_from_doc(doc: &Document, source: &str) -> Vec<String> {
         }
     };
 
-    // Extract [[title]] from raw cell text (tables skip inline parsing)
-    let extract_from_text =
-        |text: &str, seen: &mut std::collections::HashSet<String>, result: &mut Vec<String>| {
-            let bytes = text.as_bytes();
-            let mut i = 0;
-            while i + 1 < bytes.len() {
-                if bytes[i] == b'[' && bytes[i + 1] == b'[' {
-                    let start = i + 2;
-                    if let Some(end) = text[start..].find("]]") {
-                        let body = &text[start..start + end];
-                        let target = body.split('|').next().unwrap_or(body).trim().to_string();
-                        if !target.is_empty() && seen.insert(target.clone()) {
-                            result.push(target);
-                        }
-                        i = start + end + 2;
-                        continue;
-                    }
-                }
-                i += 1;
-            }
-        };
-
     for block in &doc.blocks {
         // Skip code blocks and mermaid diagrams — wiki-link-looking text
         // in either is source content, not a real link.
         if matches!(
             block.kind,
-            BlockKind::CodeBlock { .. } | BlockKind::MermaidDiagram { .. }
+            BlockKind::CodeBlock { .. } | BlockKind::MermaidDiagram { .. } | BlockKind::Math { .. }
         ) {
             continue;
         }
@@ -718,8 +750,6 @@ fn extract_wiki_links_from_doc(doc: &Document, source: &str) -> Vec<String> {
             extract_title(span, &mut seen, &mut result);
         }
 
-        // Also check list items' inline spans (grouped mode)
-        // and table cells (which don't get inline spans from the parser)
         match &block.kind {
             BlockKind::BulletList { items } | BlockKind::OrderedList { items, .. } => {
                 for item in items {
@@ -728,13 +758,10 @@ fn extract_wiki_links_from_doc(doc: &Document, source: &str) -> Vec<String> {
                     }
                 }
             }
-            BlockKind::Table { headers, rows, .. } => {
-                for cell in headers {
-                    extract_from_text(cell, &mut seen, &mut result);
-                }
-                for row in rows {
-                    for cell in row {
-                        extract_from_text(cell, &mut seen, &mut result);
+            BlockKind::Table { .. } => {
+                for cell in &block.table_cells {
+                    for span in &cell.inline_spans {
+                        extract_title(span, &mut seen, &mut result);
                     }
                 }
             }
@@ -1063,6 +1090,10 @@ fn convert_inline_kind(kind: &InlineKind) -> FfiInlineType {
         InlineKind::Strikethrough => FfiInlineType::Strikethrough,
         InlineKind::UnderlineTilde => FfiInlineType::UnderlineTilde,
         InlineKind::UnderlineHtml => FfiInlineType::UnderlineHtml,
+        InlineKind::UnderlinePlus => FfiInlineType::UnderlinePlus,
+        InlineKind::Math { expression } => FfiInlineType::Math {
+            expression: expression.clone(),
+        },
         InlineKind::InlineCode => FfiInlineType::InlineCode,
         InlineKind::Highlight => FfiInlineType::Highlight,
         InlineKind::HighlightColor(idx) => FfiInlineType::HighlightColor { color_index: *idx },

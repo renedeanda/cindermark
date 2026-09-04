@@ -1,20 +1,7 @@
 //! Inline span parser using a delimiter-run algorithm.
 //!
-//! Processes the text content of each block to identify inline formatting:
-//! bold, italic, strikethrough, highlight, underline, links, wiki links, etc.
-//!
-//! Priority order (matching `MarkdownTextStyling.swift`):
-//! 1. Inline code (backticks) — highest, content is literal
-//! 2. Wiki links [[...]]
-//! 3. Markdown links [text](url)
-//! 4. Bold-italic ***...***
-//! 5. Bold **...**
-//! 6. Italic *...*
-//! 7. Strikethrough ~~...~~
-//! 8. Colored highlight ==emoji...==, then default highlight ==...==
-//! 9. HTML underline <u>...</u>
-//! 10. Tilde underline ~...~
-//! 11. Footnote refs [^label]
+//! Opaque code, links, comments and math protect their source from lower-priority
+//! formatting. See `docs/compatibility.md` for the extension profile.
 
 use crate::ast::*;
 use crate::utf16::Utf16Map;
@@ -22,8 +9,14 @@ use crate::utf16::Utf16Map;
 /// Run inline span parsing on all blocks in the document.
 pub fn parse_inline_spans(blocks: &mut [BlockNode], source: &[u8], utf16_map: &Utf16Map) {
     for block in blocks.iter_mut() {
+        if matches!(block.kind, BlockKind::Table { .. }) {
+            parse_table_spans(block, source, utf16_map);
+            continue;
+        }
         match &block.kind {
             BlockKind::CodeBlock { .. }
+            | BlockKind::Math { .. }
+            | BlockKind::MermaidDiagram { .. }
             | BlockKind::HorizontalRule
             | BlockKind::Empty
             | BlockKind::Table { .. }
@@ -177,6 +170,15 @@ pub(crate) fn parse_spans(
         &mut claimed,
     );
 
+    parse_extended_inlines(
+        text,
+        byte_offset,
+        source,
+        utf16_map,
+        &mut spans,
+        &mut claimed,
+    );
+
     // 3c. Hex color literals (`#FF0000`, `#RGB`, `#RGBA`, `#RRGGBBAA`).
     //     Runs after link scanners so `[anchor](#fragment)` stays a link.
     parse_hex_colors(
@@ -253,10 +255,271 @@ pub(crate) fn parse_spans(
 
     // Sort by position for consistent output
     spans.sort_by_key(|s| s.utf16_start);
+    reject_crossing_plus(&mut spans);
     spans
 }
 
+fn reject_crossing_plus(spans: &mut Vec<InlineSpan>) {
+    if !spans
+        .iter()
+        .any(|span| matches!(span.kind, InlineKind::UnderlinePlus))
+    {
+        return;
+    }
+    let mut rejected = vec![false; spans.len()];
+    // Opposite sweeps identify both crossing endpoints without enumerating pairs.
+    for reverse in [false, true] {
+        let mut ordered: Vec<_> = spans
+            .iter()
+            .enumerate()
+            .map(|(index, span)| {
+                let (start, end) = if reverse {
+                    (u32::MAX - span.utf16_end, u32::MAX - span.utf16_start)
+                } else {
+                    (span.utf16_start, span.utf16_end)
+                };
+                (start, end, index)
+            })
+            .collect();
+        ordered.sort_unstable();
+        let mut all_ends = std::collections::BTreeSet::new();
+        let mut plus_ends = std::collections::BTreeSet::new();
+        let mut group_start = 0;
+        while group_start < ordered.len() {
+            let start = ordered[group_start].0;
+            let group_end =
+                group_start + ordered[group_start..].partition_point(|entry| entry.0 == start);
+            for &(_, end, index) in &ordered[group_start..group_end] {
+                let plus = matches!(spans[index].kind, InlineKind::UnderlinePlus);
+                let ends = if plus { &all_ends } else { &plus_ends };
+                if start < end
+                    && ends
+                        .range((
+                            std::ops::Bound::Excluded(start),
+                            std::ops::Bound::Excluded(end),
+                        ))
+                        .next()
+                        .is_some()
+                {
+                    rejected[index] = true;
+                }
+            }
+            for &(_, end, index) in &ordered[group_start..group_end] {
+                all_ends.insert(end);
+                if matches!(spans[index].kind, InlineKind::UnderlinePlus) {
+                    plus_ends.insert(end);
+                }
+            }
+            group_start = group_end;
+        }
+    }
+    let mut index = 0;
+    spans.retain(|_| {
+        let keep = !rejected[index];
+        index += 1;
+        keep
+    });
+}
+
 // MARK: - Inline code
+
+fn parse_extended_inlines(
+    text: &[u8],
+    byte_offset: usize,
+    source: &[u8],
+    utf16_map: &Utf16Map,
+    spans: &mut Vec<InlineSpan>,
+    claimed: &mut ClaimedRanges,
+) {
+    if !text.contains(&b'+') && !text.contains(&b'$') {
+        return;
+    }
+    let mut protected = vec![false; text.len()];
+    for &(start, end) in &claimed.ranges {
+        let start = start.saturating_sub(byte_offset).min(text.len());
+        let end = end.saturating_sub(byte_offset).min(text.len());
+        protected[start..end].fill(true);
+    }
+    for span in spans
+        .iter()
+        .filter(|span| matches!(span.kind, InlineKind::Link { .. }))
+    {
+        let start = utf16_map.utf16_to_byte(span.content_utf16_start, source) as usize;
+        let end = utf16_map.utf16_to_byte(span.content_utf16_end, source) as usize;
+        let full_start = utf16_map.utf16_to_byte(span.utf16_start, source) as usize;
+        if full_start > 0 && source[full_start - 1] == b'!' {
+            continue;
+        }
+        protected[start.saturating_sub(byte_offset)..end.saturating_sub(byte_offset)].fill(false);
+    }
+    // Attribute values are opaque even when the host does not render raw HTML.
+    let mut tag_start = None;
+    let mut quote = None;
+    for i in 0..text.len() {
+        if protected[i] {
+            continue;
+        }
+        if tag_start.is_some() {
+            match (quote, text[i]) {
+                (Some(q), b) if q == b => quote = None,
+                (None, b'\'' | b'"') => quote = Some(text[i]),
+                (None, b'>') => {
+                    protected[tag_start.take().unwrap_or(i)..=i].fill(true);
+                }
+                _ => {}
+            }
+        } else if text[i] == b'<'
+            && !is_escaped(text, i)
+            && text
+                .get(i + 1)
+                .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'/')
+        {
+            tag_start = Some(i);
+        }
+    }
+
+    let mut math_spans = Vec::new();
+    let mut math_ranges = Vec::new();
+    let mut opener = None;
+    let mut i = 0;
+    while i < text.len() {
+        if text[i] == b'\n' || text[i] == b'\r' || (protected[i] && opener.is_none()) {
+            opener = None;
+            i += 1;
+            continue;
+        }
+        if text[i] != b'$' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < text.len() && text[i] == b'$' {
+            i += 1;
+        }
+        if i - start != 1 || is_escaped(text, start) {
+            continue;
+        }
+        let can_close = char_before(text, start).is_some_and(|c| !c.is_whitespace())
+            && !text.get(i).is_some_and(u8::is_ascii_digit);
+        if let Some(open) = opener {
+            if can_close && start > open + 1 {
+                let expression = String::from_utf8_lossy(&text[open + 1..start]).into_owned();
+                math_spans.push(make_span(
+                    InlineKind::Math { expression },
+                    byte_offset + open,
+                    byte_offset + i,
+                    byte_offset + open + 1,
+                    byte_offset + start,
+                    source,
+                    utf16_map,
+                ));
+                math_ranges.push((byte_offset + open, byte_offset + i));
+                protected[open..i].fill(true);
+                opener = None;
+                continue;
+            }
+        }
+        if opener.is_none() && char_at(text, i).is_some_and(|c| !c.is_whitespace() && c != '`') {
+            opener = Some(start);
+        }
+    }
+
+    spans.retain(|span| {
+        let index = math_spans.partition_point(|math| math.utf16_start <= span.utf16_start);
+        index == 0 || span.utf16_end > math_spans[index - 1].utf16_end
+    });
+    claimed.ranges.retain(|&(start, end)| {
+        let index = math_ranges.partition_point(|&(math_start, _)| math_start <= start);
+        index == 0 || end > math_ranges[index - 1].1
+    });
+    claimed.ranges.extend(math_ranges);
+    spans.extend(math_spans);
+
+    let mut openers = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        if protected[i] {
+            i += 1;
+            continue;
+        }
+        if text[i] != b'+' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < text.len() && text[i] == b'+' {
+            i += 1;
+        }
+        if i - start != 2 || is_escaped(text, start) {
+            continue;
+        }
+        let before = char_before(text, start);
+        let after = char_at(text, i);
+        let before_space = before.is_none_or(is_unicode_whitespace);
+        let after_space = after.is_none_or(is_unicode_whitespace);
+        let before_punct = before.is_some_and(is_unicode_punctuation);
+        let after_punct = after.is_some_and(is_unicode_punctuation);
+        let left = !after_space && (!after_punct || before_space || before_punct);
+        let right = !before_space && (!before_punct || after_space || after_punct);
+        let can_open = left && (!right || before_punct);
+        let can_close = right && (!left || after_punct);
+        if can_close {
+            if let Some(open) = openers.pop() {
+                if start > open + 2 {
+                    spans.push(make_span(
+                        InlineKind::UnderlinePlus,
+                        byte_offset + open,
+                        byte_offset + i,
+                        byte_offset + open + 2,
+                        byte_offset + start,
+                        source,
+                        utf16_map,
+                    ));
+                    continue;
+                }
+            }
+        }
+        if can_open {
+            openers.push(start);
+        }
+    }
+}
+
+fn parse_table_spans(block: &mut BlockNode, source: &[u8], map: &Utf16Map) {
+    let BlockKind::Table { rows, .. } = &block.kind else {
+        return;
+    };
+    let line_count = rows.len() + 2;
+    let mut offset = block.byte_start as usize;
+    let mut row = 0;
+    for (line_index, line) in source[offset..block.byte_end as usize]
+        .split_inclusive(|b| *b == b'\n')
+        .take(line_count)
+        .enumerate()
+    {
+        if line_index == 1 {
+            offset += line.len();
+            continue;
+        }
+        let text = std::str::from_utf8(line).unwrap_or("");
+        for (column, range) in crate::parser::table_cell_ranges(text)
+            .into_iter()
+            .enumerate()
+        {
+            let start = offset + range.start;
+            let end = offset + range.end;
+            block.table_cells.push(TableCell {
+                row,
+                column: column as u32,
+                utf16_start: map.byte_to_utf16(start as u32, source),
+                utf16_end: map.byte_to_utf16(end as u32, source),
+                inline_spans: parse_spans(&source[start..end], start, source, map),
+            });
+        }
+        row += 1;
+        offset += line.len();
+    }
+}
 
 /// Multi-backtick inline code per CommonMark: the opening backtick string must
 /// be matched by a closing backtick string of the exact same length.

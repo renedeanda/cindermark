@@ -26,6 +26,7 @@ interface FfiBlockType {
     // 15=Quadrant, 16=Sankey, 17=XYChart, 18=Block, 19=Packet, 20=Architecture,
     // 21=Kanban, 22=Radar). Source is carried in the block's `text` field.
     MermaidDiagram(u8 diagram_type);
+    Math(u8 syntax, u32 content_utf16_start, u32 content_utf16_end);
 };
 
 [Enum]
@@ -49,6 +50,8 @@ interface FfiInlineType {
     Comment();
     // Inline hex color literal. `hex` is normalized 6-digit lowercase.
     HexColor(string hex);
+    UnderlinePlus();
+    Math(string expression);
 };
 
 dictionary FfiInlineSpan {
@@ -65,6 +68,7 @@ dictionary FfiListItem {
 };
 
 dictionary FfiBlock {
+    sequence<FfiTableCell> table_cells;
     FfiBlockType block_type;
     u32 line_start;
     u32 line_end;
@@ -87,6 +91,14 @@ dictionary FfiBlock {
     sequence<string> table_headers;
     sequence<sequence<string>> table_rows;
     sequence<u8> table_alignments;
+};
+
+dictionary FfiTableCell {
+    u32 row;
+    u32 column;
+    u32 utf16_start;
+    u32 utf16_end;
+    sequence<FfiInlineSpan> inline_spans;
 };
 
 dictionary FfiDocumentStats {

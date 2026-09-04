@@ -117,6 +117,21 @@ fn bench_incremental_with_stats_2500(c: &mut Criterion) {
     bench_incremental_keystroke(c, "incremental_with_stats_2500", 2500, true);
 }
 
+fn bench_extended_syntax(c: &mut Criterion) {
+    for (name, source) in [
+        (
+            "math_1000_lines",
+            "$\\frac{α}{β} + x^2$ and ++text++\n\n".repeat(1000),
+        ),
+        ("unmatched_delimiters_1mb", "\\++ $ +++ ".repeat(100_000)),
+    ] {
+        let parser = CindermarkParser::new(None);
+        c.bench_function(name, |b| {
+            b.iter(|| parser.parse_editable(black_box(source.clone())))
+        });
+    }
+}
+
 criterion_group!(
     benches,
     bench_parse_500,
@@ -125,6 +140,7 @@ criterion_group!(
     bench_incremental_500,
     bench_incremental_2500,
     bench_incremental_10k,
-    bench_incremental_with_stats_2500
+    bench_incremental_with_stats_2500,
+    bench_extended_syntax
 );
 criterion_main!(benches);
