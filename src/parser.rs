@@ -40,6 +40,7 @@ struct ParsedListMarker<'a> {
     marker_start: usize,
     marker_end: usize,
     content_start: usize,
+    container_content_start: usize,
     marker_source: &'a str,
     unordered_marker: Option<char>,
     ordered_delimiter: Option<char>,
@@ -74,6 +75,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
     let lines = split_lines(source);
     let mut blocks = Vec::new();
     let mut i = 0;
+    let mut list_contexts = Vec::new();
 
     while i < lines.len() {
         let line = &lines[i];
@@ -123,8 +125,21 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             }
         }
 
-        if let Some((kind, end_line)) = quoted_math(&lines, i, bytes, &utf16_map) {
-            blocks.push(make_block(kind, &lines, i, end_line, bytes, &utf16_map));
+        update_list_context(line.text, &mut list_contexts);
+        if let Some((kind, end_line)) =
+            container_math(&lines, i, bytes, &utf16_map, list_contexts.last().copied())
+        {
+            let mut block = make_block(kind, &lines, i, end_line, bytes, &utf16_map);
+            let (prefix, _) = quote_prefix(line.text);
+            if let Some(marker) = parse_list_marker(&line.text[prefix..]) {
+                let logical_line = Line {
+                    text: &line.text[prefix..],
+                    byte_start: line.byte_start + prefix,
+                    byte_end: line.byte_end,
+                };
+                block.list_marker = Some(marker_to_meta(&marker, &logical_line, bytes, &utf16_map));
+            }
+            blocks.push(block);
             i = end_line;
             continue;
         }
@@ -179,6 +194,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                     expression,
                     syntax: MathSyntax::Dollars,
                     quote_depth: 0,
+                    list_context: None,
                     info_string: None,
                     content_utf16_start: utf16_map.byte_to_utf16(content_start as u32, bytes),
                     content_utf16_end: utf16_map.byte_to_utf16(content_end as u32, bytes),
@@ -222,6 +238,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                     expression: code,
                     syntax: MathSyntax::Fence,
                     quote_depth: 0,
+                    list_context: None,
                     info_string: Some(info.to_owned()),
                     content_utf16_start: utf16_map.byte_to_utf16(content_start as u32, bytes),
                     content_utf16_end: utf16_map.byte_to_utf16(content_end as u32, bytes),
@@ -317,6 +334,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                 } else {
                     break;
                 }
+                update_list_context(lines[i].text, &mut list_contexts);
                 i += 1;
             }
             // Callout: first line begins with `[!<kind>]` (optionally followed by a title).
@@ -389,6 +407,16 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                     let first_marker = marker.clone();
                     let mut items: Vec<String> = Vec::new();
                     while i < lines.len() {
+                        if i > start_line
+                            && math_start_after_container(
+                                lines[i].text,
+                                list_contexts.last().copied(),
+                            )
+                            .is_some()
+                        {
+                            break;
+                        }
+                        update_list_context(lines[i].text, &mut list_contexts);
                         let Some(ul_marker) = parse_list_marker(lines[i].text) else {
                             let ul = lines[i].text.trim();
                             if ul.is_empty() {
@@ -458,6 +486,16 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                     let first_marker = marker.clone();
                     let mut items: Vec<String> = Vec::new();
                     while i < lines.len() {
+                        if i > start_line
+                            && math_start_after_container(
+                                lines[i].text,
+                                list_contexts.last().copied(),
+                            )
+                            .is_some()
+                        {
+                            break;
+                        }
+                        update_list_context(lines[i].text, &mut list_contexts);
                         let ol = lines[i].text.trim();
                         if let Some(ol_marker) = parse_list_marker(lines[i].text) {
                             if ol_marker.kind == ParsedListKind::Ordered
@@ -532,6 +570,8 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             if pt.is_empty()
                 || opening_fence(pt).is_some()
                 || (i > start_line && pt.starts_with("$$"))
+                || (i > start_line
+                    && math_start_after_container(pl, list_contexts.last().copied()).is_some())
                 || is_heading_line(pt)
                 || pt.starts_with("> ")
                 || is_horizontal_rule(pt)
@@ -616,9 +656,91 @@ fn quote_prefix(text: &str) -> (usize, u32) {
     (offset, depth)
 }
 
-fn quoted_math_start(text: &str) -> Option<(usize, u32)> {
-    let (offset, depth) = quote_prefix(text);
-    if depth == 0 {
+#[derive(Clone, Copy)]
+struct ListContainer {
+    quote_depth: u32,
+    context: MathListContext,
+}
+
+fn column_width(text: &str) -> usize {
+    text.bytes().fold(0, |column, byte| {
+        if byte == b'\t' {
+            (column / 4 + 1) * 4
+        } else {
+            column + 1
+        }
+    })
+}
+
+fn strip_container_indent(text: &str, required: usize) -> Option<usize> {
+    let mut columns = 0;
+    let mut offset = 0;
+    while columns < required {
+        match text.as_bytes().get(offset)? {
+            b' ' => columns += 1,
+            b'\t' => columns = (columns / 4 + 1) * 4,
+            _ => return None,
+        }
+        offset += 1;
+    }
+    Some(offset)
+}
+
+fn marker_context(marker: &ParsedListMarker<'_>, text: &str) -> MathListContext {
+    MathListContext {
+        content_indent: column_width(&text[..marker.container_content_start]) as u32,
+        kind: match marker.kind {
+            ParsedListKind::Bullet => 1,
+            ParsedListKind::Ordered => 2,
+            ParsedListKind::Checkbox(false) => 3,
+            ParsedListKind::Checkbox(true) => 4,
+        },
+        number: marker.ordered_number,
+    }
+}
+
+fn update_list_context(text: &str, contexts: &mut Vec<ListContainer>) {
+    let (prefix, quote_depth) = quote_prefix(text);
+    let content = &text[prefix..];
+    if content.trim().is_empty() {
+        return;
+    }
+    let indent_bytes = content.len() - content.trim_start_matches([' ', '\t']).len();
+    let indent = column_width(&content[..indent_bytes]);
+    while contexts.last().is_some_and(|container| {
+        container.quote_depth != quote_depth || indent < container.context.content_indent as usize
+    }) {
+        contexts.pop();
+    }
+    if let Some(marker) = parse_list_marker(content) {
+        contexts.push(ListContainer {
+            quote_depth,
+            context: marker_context(&marker, content),
+        });
+    }
+}
+
+fn math_start_after_container(
+    text: &str,
+    active: Option<ListContainer>,
+) -> Option<(usize, u32, Option<MathListContext>)> {
+    let (quote_offset, depth) = quote_prefix(text);
+    let content = &text[quote_offset..];
+    let (offset, list_context) = if let Some(marker) = parse_list_marker(content) {
+        (
+            quote_offset + marker.content_start,
+            Some(marker_context(&marker, content)),
+        )
+    } else if let Some(container) = active.filter(|container| container.quote_depth == depth) {
+        (
+            quote_offset
+                + strip_container_indent(content, container.context.content_indent as usize)?,
+            Some(container.context),
+        )
+    } else {
+        (quote_offset, None)
+    };
+    if depth == 0 && list_context.is_none() {
         return None;
     }
     let content = text[offset..].trim_start_matches(' ');
@@ -632,23 +754,59 @@ fn quoted_math_start(text: &str) -> Option<(usize, u32)> {
                 .any(|language| word.eq_ignore_ascii_case(language))
         })
     });
-    (content.starts_with("$$") || is_math_fence).then_some((offset, depth))
+    (content.starts_with("$$") || is_math_fence).then_some((offset, depth, list_context))
 }
 
-fn quoted_math(
+fn quoted_math_start(text: &str) -> Option<(usize, u32)> {
+    math_start_after_container(text, None)
+        .filter(|(_, depth, _)| *depth > 0)
+        .map(|(offset, depth, _)| (offset, depth))
+}
+
+pub(crate) fn may_start_math(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.starts_with("$$")
+        || math_start_after_container(text, None).is_some()
+        || opening_fence(trimmed).is_some_and(|(_, _, info)| {
+            info.split_whitespace().next().is_some_and(|word| {
+                ["math", "latex", "tex"]
+                    .iter()
+                    .any(|language| word.eq_ignore_ascii_case(language))
+            })
+        })
+}
+
+fn container_math(
     lines: &[Line<'_>],
     start: usize,
     source: &[u8],
     map: &Utf16Map,
+    active: Option<ListContainer>,
 ) -> Option<(BlockKind, usize)> {
-    let (offset, depth) = quoted_math_start(lines[start].text)?;
+    let (offset, depth, list_context) = math_start_after_container(lines[start].text, active)?;
     let first = &lines[start].text[offset..];
     let fence = opening_fence(first.trim());
     let mut logical = Vec::new();
     for (index, line) in lines.iter().enumerate().skip(start) {
-        let (prefix, line_depth) = quote_prefix(line.text);
+        let (mut prefix, line_depth) = quote_prefix(line.text);
         if line_depth != depth {
             break;
+        }
+        if index == start {
+            prefix = offset;
+        } else if let Some(context) = list_context {
+            let Some(indent) =
+                strip_container_indent(&line.text[prefix..], context.content_indent as usize)
+                    .or_else(|| {
+                        line.text[prefix..]
+                            .trim()
+                            .is_empty()
+                            .then_some(line.text.len() - prefix)
+                    })
+            else {
+                break;
+            };
+            prefix += indent;
         }
         let content = &line.text[prefix..];
         logical.push(Line {
@@ -718,6 +876,7 @@ fn quoted_math(
             expression,
             syntax,
             quote_depth: depth,
+            list_context,
             info_string,
             content_utf16_start: map.byte_to_utf16(content_start as u32, source),
             content_utf16_end: map.byte_to_utf16(content_end as u32, source),
@@ -1152,6 +1311,7 @@ fn parse_list_marker(line: &str) -> Option<ParsedListMarker<'_>> {
                 marker_start,
                 marker_end: checkbox_end,
                 content_start: checkbox_end,
+                container_content_start: bullet_marker_end,
                 marker_source,
                 unordered_marker: Some(marker_byte as char),
                 ordered_delimiter: None,
@@ -1167,6 +1327,7 @@ fn parse_list_marker(line: &str) -> Option<ParsedListMarker<'_>> {
             marker_start,
             marker_end: bullet_marker_end,
             content_start: bullet_marker_end,
+            container_content_start: bullet_marker_end,
             marker_source,
             unordered_marker: Some(marker_byte as char),
             ordered_delimiter: None,
@@ -1211,6 +1372,7 @@ fn parse_list_marker(line: &str) -> Option<ParsedListMarker<'_>> {
             marker_start,
             marker_end,
             content_start: marker_end,
+            container_content_start: marker_end,
             marker_source,
             unordered_marker: None,
             ordered_delimiter: Some(delimiter as char),

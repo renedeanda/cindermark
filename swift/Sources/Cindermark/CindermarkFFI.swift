@@ -1945,7 +1945,7 @@ public enum FfiBlockType {
     )
     case mermaidDiagram(diagramType: UInt8
     )
-    case math(syntax: UInt8, quoteDepth: UInt32, contentUtf16Start: UInt32, contentUtf16End: UInt32
+    case math(syntax: UInt8, quoteDepth: UInt32, listKind: UInt8, listContentIndent: UInt32, contentUtf16Start: UInt32, contentUtf16End: UInt32
     )
 }
 
@@ -1994,7 +1994,7 @@ public struct FfiConverterTypeFfiBlockType: FfiConverterRustBuffer {
         case 16: return .mermaidDiagram(diagramType: try FfiConverterUInt8.read(from: &buf)
         )
         
-        case 17: return .math(syntax: try FfiConverterUInt8.read(from: &buf), quoteDepth: try FfiConverterUInt32.read(from: &buf), contentUtf16Start: try FfiConverterUInt32.read(from: &buf), contentUtf16End: try FfiConverterUInt32.read(from: &buf)
+        case 17: return .math(syntax: try FfiConverterUInt8.read(from: &buf), quoteDepth: try FfiConverterUInt32.read(from: &buf), listKind: try FfiConverterUInt8.read(from: &buf), listContentIndent: try FfiConverterUInt32.read(from: &buf), contentUtf16Start: try FfiConverterUInt32.read(from: &buf), contentUtf16End: try FfiConverterUInt32.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -2071,10 +2071,12 @@ public struct FfiConverterTypeFfiBlockType: FfiConverterRustBuffer {
             FfiConverterUInt8.write(diagramType, into: &buf)
             
         
-        case let .math(syntax,quoteDepth,contentUtf16Start,contentUtf16End):
+        case let .math(syntax,quoteDepth,listKind,listContentIndent,contentUtf16Start,contentUtf16End):
             writeInt(&buf, Int32(17))
             FfiConverterUInt8.write(syntax, into: &buf)
             FfiConverterUInt32.write(quoteDepth, into: &buf)
+            FfiConverterUInt8.write(listKind, into: &buf)
+            FfiConverterUInt32.write(listContentIndent, into: &buf)
             FfiConverterUInt32.write(contentUtf16Start, into: &buf)
             FfiConverterUInt32.write(contentUtf16End, into: &buf)
             

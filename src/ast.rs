@@ -76,6 +76,7 @@ pub enum BlockKind {
         expression: String,
         syntax: MathSyntax,
         quote_depth: u32,
+        list_context: Option<MathListContext>,
         info_string: Option<String>,
         content_utf16_start: u32,
         content_utf16_end: u32,
@@ -152,6 +153,14 @@ pub enum BlockKind {
 pub enum MathSyntax {
     Dollars = 0,
     Fence = 1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MathListContext {
+    pub content_indent: u32,
+    /// 1: bullet, 2: ordered, 3: unchecked task, 4: checked task.
+    pub kind: u8,
+    pub number: u32,
 }
 
 /// Mermaid diagram type, classified from the first non-blank content line of

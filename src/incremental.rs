@@ -246,6 +246,18 @@ fn needs_full_reparse(
     edit_utf16_start: u32,
     edit_new_utf16_len: u32,
 ) -> bool {
+    // A preceding edit can change the list context of a distant math block.
+    // Until snapshots carry container checkpoints, reparse that dependency.
+    if prev.blocks[first_dirty..]
+        .iter()
+        .any(|block| match &block.kind {
+            BlockKind::Math { .. } => true,
+            BlockKind::CodeBlock { code, .. } => code.lines().any(parser::may_start_math),
+            _ => false,
+        })
+    {
+        return true;
+    }
     // Check if any old dirty block is a code block, mermaid diagram, or
     // table. All three are multi-line fenced/structured blocks whose reach
     // is unbounded from any single-line edit.
@@ -282,6 +294,7 @@ fn needs_full_reparse(
         if line.trim().starts_with("```")
             || line.trim().starts_with("~~~")
             || line.trim().starts_with("$$")
+            || parser::may_start_math(line)
         {
             return true;
         }

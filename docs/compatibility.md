@@ -18,6 +18,12 @@ strings, for lossless copy, edits and export, including CRLF preservation.
 Quoted math reports `quote_depth` (`quoteDepth` in WASM). Its content range is
 the source envelope, including intervening quote prefixes; its expression
 omits those prefixes. Full block ranges retain every source character.
+List math additionally reports the list's content indentation and kind
+(0 none, 1 bullet, 2 ordered, 3 unchecked task, 4 checked task). The block's
+number and checked fields retain the containing item's identity. A marker on
+the math opening line retains its exact marker metadata; a continuation does
+not invent a duplicate marker. Task continuation indentation belongs to the
+bullet marker, not the visual width of `[ ]`.
 
 Table cells retain the existing header/row strings and additionally expose
 inline spans and source ranges. Row zero is the header; row one is the first
@@ -51,6 +57,9 @@ expand macros, execute code or load resources.
 - Explicitly prefixed blockquotes support dollar and fenced math, including
   nested quote depth. Recognition stops at the enclosing quote boundary;
   unclosed dollar forms remain literal, while fences end at that boundary.
+- List items support math on their marker line or in an indented continuation,
+  including nested lists and lists inside explicitly prefixed blockquotes.
+  Fences permit blank content lines and stop when the list container ends.
 - Fences classify the first info-string word, case-insensitively: `math`,
   `latex` or `tex`. The full info string is retained. Backtick and tilde fences
   require at least three identical characters; closing fences use the same
@@ -76,7 +85,10 @@ adding math syntax/content metadata and `tableCells`.
 ## Known deviations and outstanding development gates
 
 - Lists remain column-based rather than a complete CommonMark container tree.
-  List/compound list-and-quote math and lazy quote continuations remain open.
+  Quotes introduced inside list items and lazy quote continuations remain open.
+- Incremental edits before math conservatively reparse the document because
+  a changed ancestor list marker can alter a distant math container. Plain-note
+  incremental parsing remains available; container checkpoints are not yet cached.
 - Bare CR line splitting, NUL replacement and general HTML-block semantics do
   not yet constitute CommonMark conformance.
 - Previews preserve readable math delimiters and opaque expressions; display

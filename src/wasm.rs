@@ -118,6 +118,8 @@ fn push_blocks(out: &mut String, blocks: &[FfiBlock]) {
             FfiBlockType::Math {
                 syntax,
                 quote_depth,
+                list_kind,
+                list_content_indent,
                 content_utf16_start,
                 content_utf16_end,
             } => {
@@ -131,6 +133,10 @@ fn push_blocks(out: &mut String, blocks: &[FfiBlock]) {
                 push_u32(out, *content_utf16_end);
                 out.push_str(",\"quoteDepth\":");
                 push_u32(out, *quote_depth);
+                out.push_str(",\"listKind\":");
+                push_u32(out, u32::from(*list_kind));
+                out.push_str(",\"listContentIndent\":");
+                push_u32(out, *list_content_indent);
             }
             FfiBlockType::Heading => {
                 out.push_str(",\"level\":");
