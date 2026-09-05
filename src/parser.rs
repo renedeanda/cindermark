@@ -712,6 +712,12 @@ fn update_list_context(text: &str, contexts: &mut Vec<ListContainer>) {
     }) {
         contexts.pop();
     }
+    let container_indent = contexts
+        .last()
+        .map_or(0, |container| container.context.content_indent as usize);
+    if indent.saturating_sub(container_indent) > 3 {
+        return;
+    }
     if let Some(marker) = parse_list_marker(content) {
         contexts.push(ListContainer {
             quote_depth,
@@ -727,10 +733,19 @@ fn math_start_after_container(
     let (quote_offset, depth) = quote_prefix(text);
     let content = &text[quote_offset..];
     let (offset, list_context) = if let Some(marker) = parse_list_marker(content) {
-        (
-            quote_offset + marker.content_start,
-            Some(marker_context(&marker, content)),
-        )
+        let context = marker_context(&marker, content);
+        let indent = column_width(&content[..marker.marker_start]);
+        let fits_container = indent <= 3
+            || active.is_some_and(|container| {
+                let parent_indent = container.context.content_indent as usize;
+                container.quote_depth == depth
+                    && (container.context == context
+                        || (indent >= parent_indent && indent - parent_indent <= 3))
+            });
+        if !fits_container {
+            return None;
+        }
+        (quote_offset + marker.content_start, Some(context))
     } else if let Some(container) = active.filter(|container| container.quote_depth == depth) {
         (
             quote_offset

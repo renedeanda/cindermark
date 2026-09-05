@@ -1,6 +1,33 @@
 use cindermark::{CindermarkParser, FfiBlockType};
 
 #[test]
+fn indented_code_cannot_introduce_math_list_containers() {
+    for source in [
+        "    - $$x$$",
+        "\t- $$x$$",
+        "    1. ~~~math\n       x\n       ~~~",
+        "- parent\n      - $$x$$",
+        ">     - $$x$$",
+    ] {
+        for grouped in [false, true] {
+            let parser = CindermarkParser::new(None);
+            let parsed = if grouped {
+                parser.parse(source.into())
+            } else {
+                parser.parse_editable(source.into())
+            };
+            assert!(
+                !parsed
+                    .blocks
+                    .iter()
+                    .any(|block| matches!(block.block_type, FfiBlockType::Math { .. })),
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
 fn math_continues_a_list_item_without_consuming_siblings() {
     for source in [
         "- item\n  $$\n  x + y\n  $$\n- next",
