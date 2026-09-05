@@ -13,11 +13,15 @@
 #![allow(clippy::empty_line_after_doc_comments)] // UniFFI 0.28 generated scaffolding.
 
 pub mod ast;
+mod html;
 pub mod incremental;
 pub mod inline;
 pub mod lexer;
 pub mod parser;
+pub mod resources;
 pub mod utf16;
+
+pub use resources::ResourceReference;
 
 use ast::*;
 use std::sync::Mutex;
@@ -49,6 +53,16 @@ pub enum FfiBlockType {
     MermaidDiagram {
         diagram_type: u8,
     },
+    Math {
+        syntax: u8,
+        quote_depth: u32,
+        list_kind: u8,
+        list_content_indent: u32,
+        content_utf16_start: u32,
+        content_utf16_end: u32,
+    },
+    /// Opaque source is carried in `FfiBlock.text`; consumers must escape it.
+    RawHtml,
 }
 
 /// Inline type enum for FFI.
@@ -70,6 +84,8 @@ pub enum FfiInlineType {
     FootnoteRef,
     Comment,
     HexColor { hex: String },
+    UnderlinePlus,
+    Math { expression: String },
 }
 
 /// An inline span for FFI transport.
@@ -89,9 +105,19 @@ pub struct FfiListItem {
     pub inline_spans: Vec<FfiInlineSpan>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FfiTableCell {
+    pub row: u32,
+    pub column: u32,
+    pub utf16_start: u32,
+    pub utf16_end: u32,
+    pub inline_spans: Vec<FfiInlineSpan>,
+}
+
 /// A block for FFI transport.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FfiBlock {
+    pub table_cells: Vec<FfiTableCell>,
     pub block_type: FfiBlockType,
     pub line_start: u32,
     pub line_end: u32,
@@ -218,6 +244,10 @@ fn convert_inline_span(span: &InlineSpan) -> FfiInlineSpan {
         InlineKind::Strikethrough => FfiInlineType::Strikethrough,
         InlineKind::UnderlineTilde => FfiInlineType::UnderlineTilde,
         InlineKind::UnderlineHtml => FfiInlineType::UnderlineHtml,
+        InlineKind::UnderlinePlus => FfiInlineType::UnderlinePlus,
+        InlineKind::Math { expression } => FfiInlineType::Math {
+            expression: expression.clone(),
+        },
         InlineKind::InlineCode => FfiInlineType::InlineCode,
         InlineKind::Highlight => FfiInlineType::Highlight,
         InlineKind::HighlightColor(idx) => FfiInlineType::HighlightColor { color_index: *idx },
@@ -251,6 +281,45 @@ fn convert_block(block: &BlockNode) -> FfiBlock {
         table_rows,
         table_alignments,
     ) = match &block.kind {
+        BlockKind::Math {
+            expression,
+            syntax,
+            quote_depth,
+            list_context,
+            info_string,
+            content_utf16_start,
+            content_utf16_end,
+        } => (
+            FfiBlockType::Math {
+                syntax: *syntax as u8,
+                quote_depth: *quote_depth,
+                list_kind: list_context.map_or(0, |context| context.kind),
+                list_content_indent: list_context.map_or(0, |context| context.content_indent),
+                content_utf16_start: *content_utf16_start,
+                content_utf16_end: *content_utf16_end,
+            },
+            0,
+            list_context.map_or(0, |context| context.number),
+            list_context.is_some_and(|context| context.kind == 4),
+            info_string.clone(),
+            expression.clone(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ),
+        BlockKind::RawHtml { source } => (
+            FfiBlockType::RawHtml,
+            0,
+            0,
+            false,
+            None,
+            source.clone(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ),
         BlockKind::Heading { level, text } => (
             FfiBlockType::Heading,
             *level,
@@ -479,6 +548,17 @@ fn convert_block(block: &BlockNode) -> FfiBlock {
     };
 
     FfiBlock {
+        table_cells: block
+            .table_cells
+            .iter()
+            .map(|cell| FfiTableCell {
+                row: cell.row,
+                column: cell.column,
+                utf16_start: cell.utf16_start,
+                utf16_end: cell.utf16_end,
+                inline_spans: cell.inline_spans.iter().map(convert_inline_span).collect(),
+            })
+            .collect(),
         block_type,
         line_start: block.line_start,
         line_end: block.line_end,
@@ -681,34 +761,15 @@ fn extract_wiki_links_from_doc(doc: &Document, source: &str) -> Vec<String> {
         }
     };
 
-    // Extract [[title]] from raw cell text (tables skip inline parsing)
-    let extract_from_text =
-        |text: &str, seen: &mut std::collections::HashSet<String>, result: &mut Vec<String>| {
-            let bytes = text.as_bytes();
-            let mut i = 0;
-            while i + 1 < bytes.len() {
-                if bytes[i] == b'[' && bytes[i + 1] == b'[' {
-                    let start = i + 2;
-                    if let Some(end) = text[start..].find("]]") {
-                        let body = &text[start..start + end];
-                        let target = body.split('|').next().unwrap_or(body).trim().to_string();
-                        if !target.is_empty() && seen.insert(target.clone()) {
-                            result.push(target);
-                        }
-                        i = start + end + 2;
-                        continue;
-                    }
-                }
-                i += 1;
-            }
-        };
-
     for block in &doc.blocks {
         // Skip code blocks and mermaid diagrams — wiki-link-looking text
         // in either is source content, not a real link.
         if matches!(
             block.kind,
-            BlockKind::CodeBlock { .. } | BlockKind::MermaidDiagram { .. }
+            BlockKind::CodeBlock { .. }
+                | BlockKind::MermaidDiagram { .. }
+                | BlockKind::Math { .. }
+                | BlockKind::RawHtml { .. }
         ) {
             continue;
         }
@@ -718,8 +779,6 @@ fn extract_wiki_links_from_doc(doc: &Document, source: &str) -> Vec<String> {
             extract_title(span, &mut seen, &mut result);
         }
 
-        // Also check list items' inline spans (grouped mode)
-        // and table cells (which don't get inline spans from the parser)
         match &block.kind {
             BlockKind::BulletList { items } | BlockKind::OrderedList { items, .. } => {
                 for item in items {
@@ -728,13 +787,10 @@ fn extract_wiki_links_from_doc(doc: &Document, source: &str) -> Vec<String> {
                     }
                 }
             }
-            BlockKind::Table { headers, rows, .. } => {
-                for cell in headers {
-                    extract_from_text(cell, &mut seen, &mut result);
-                }
-                for row in rows {
-                    for cell in row {
-                        extract_from_text(cell, &mut seen, &mut result);
+            BlockKind::Table { .. } => {
+                for cell in &block.table_cells {
+                    for span in &cell.inline_spans {
+                        extract_title(span, &mut seen, &mut result);
                     }
                 }
             }
@@ -826,6 +882,14 @@ impl CindermarkParser {
     pub fn parse(&self, text: String) -> FfiParseResult {
         let doc = parser::parse_with_options(&text, ParseMode::Grouped, &self.options);
         convert_document(&doc, &text)
+    }
+
+    pub fn list_item_ranges(&self, text: String) -> Vec<ListItemRange> {
+        parser::list_item_ranges(&text, &self.options)
+    }
+
+    pub fn resource_references(&self, text: String) -> Vec<ResourceReference> {
+        resources::resource_references(&text, &self.options)
     }
 
     /// Full parse in editable mode (for block editor).
@@ -1063,6 +1127,10 @@ fn convert_inline_kind(kind: &InlineKind) -> FfiInlineType {
         InlineKind::Strikethrough => FfiInlineType::Strikethrough,
         InlineKind::UnderlineTilde => FfiInlineType::UnderlineTilde,
         InlineKind::UnderlineHtml => FfiInlineType::UnderlineHtml,
+        InlineKind::UnderlinePlus => FfiInlineType::UnderlinePlus,
+        InlineKind::Math { expression } => FfiInlineType::Math {
+            expression: expression.clone(),
+        },
         InlineKind::InlineCode => FfiInlineType::InlineCode,
         InlineKind::Highlight => FfiInlineType::Highlight,
         InlineKind::HighlightColor(idx) => FfiInlineType::HighlightColor { color_index: *idx },
@@ -1083,14 +1151,7 @@ struct CleanPreview {
     clean_spans: Vec<FfiPreviewSpan>,
 }
 
-/// Build a rich preview from markdown text (the expensive shared work):
-///
-/// 1. Parse the document to get block structure
-/// 2. Build raw preview text from block contents (block markers stripped, inline markers kept)
-/// 3. Re-parse inline spans on the preview text
-/// 4. Strip inline markers and remap span positions
-///
-/// Truncation to specific lengths is cheap on top of this result.
+/// Build derived preview text and ranges; never use this as source serialization.
 fn build_clean_preview(
     text: &str,
     approx_limit: usize,
@@ -1101,8 +1162,9 @@ fn build_clean_preview(
 }
 
 fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<CleanPreview> {
-    // Step 1: Build raw preview from block texts (inline markers kept, block markers stripped)
     let mut raw_parts: Vec<String> = Vec::new();
+    let mut math_parts = std::collections::HashMap::new();
+    let mut raw_parts_indices = std::collections::HashSet::new();
     let mut approx_len: usize = 0;
 
     for block in &doc.blocks {
@@ -1111,6 +1173,17 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
         }
 
         match &block.kind {
+            BlockKind::RawHtml { source } => {
+                raw_parts_indices.insert(raw_parts.len());
+                approx_len += source.len();
+                raw_parts.push(source.clone());
+            }
+            BlockKind::Math { expression, .. } => {
+                math_parts.insert(raw_parts.len(), expression.clone());
+                let text = format!("$$\n{expression}\n$$");
+                approx_len += text.len();
+                raw_parts.push(text);
+            }
             BlockKind::Heading { text, .. }
             | BlockKind::Paragraph { text }
             | BlockKind::Blockquote { text } => {
@@ -1166,19 +1239,45 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
         return None;
     }
 
-    // Step 2: Join parts with newline separators so blocks appear on separate lines in previews
     let raw_preview = raw_parts.join("\n");
 
-    // Step 3: Parse inline spans on the raw preview text
+    // Separate parts must not pair delimiters across original block boundaries.
     let preview_bytes = raw_preview.as_bytes();
     let preview_utf16_map = utf16::Utf16Map::build(preview_bytes);
-    let inline_spans = inline::parse_spans(preview_bytes, 0, preview_bytes, &preview_utf16_map);
+    let mut inline_spans = Vec::new();
+    let mut byte_offset = 0;
+    for (index, part) in raw_parts.iter().enumerate() {
+        if let Some(expression) = math_parts.get(&index) {
+            let start = preview_utf16_map.byte_to_utf16(byte_offset as u32, preview_bytes);
+            let end =
+                preview_utf16_map.byte_to_utf16((byte_offset + part.len()) as u32, preview_bytes);
+            inline_spans.push(InlineSpan {
+                kind: InlineKind::Math {
+                    expression: expression.clone(),
+                },
+                utf16_start: start,
+                utf16_end: end,
+                content_utf16_start: start,
+                content_utf16_end: end,
+            });
+        } else if !raw_parts_indices.contains(&index) {
+            inline_spans.extend(inline::parse_spans(
+                part.as_bytes(),
+                byte_offset,
+                preview_bytes,
+                &preview_utf16_map,
+            ));
+        }
+        byte_offset += part.len() + 1;
+    }
 
-    // Step 4: Strip inline markers
     let preview_utf16_len = preview_utf16_map.total_utf16_len as usize;
     let mut is_marker = vec![false; preview_utf16_len];
 
     for span in &inline_spans {
+        if matches!(span.kind, InlineKind::Math { .. }) {
+            continue;
+        }
         // Hidden comments are stripped in their entirety from preview — mark
         // the full span so neither the `%%` fences nor the body surface.
         if matches!(span.kind, InlineKind::Comment) {
@@ -1201,7 +1300,6 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
         }
     }
 
-    // Build clean text with position mapping
     let mut clean_text = String::new();
     let mut clean_utf16_pos: u32 = 0;
     let mut input_utf16_pos: u32 = 0;
@@ -1231,11 +1329,16 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
         position_map[end_idx] = clean_utf16_pos;
     }
 
-    // Step 5: Remap inline spans to clean text positions
     let mut clean_spans: Vec<FfiPreviewSpan> = Vec::new();
     for span in &inline_spans {
-        let cs = span.content_utf16_start as usize;
-        let ce = span.content_utf16_end as usize;
+        let (cs, ce) = if matches!(span.kind, InlineKind::Math { .. }) {
+            (span.utf16_start as usize, span.utf16_end as usize)
+        } else {
+            (
+                span.content_utf16_start as usize,
+                span.content_utf16_end as usize,
+            )
+        };
 
         if cs < position_map.len() && ce <= position_map.len() {
             let mapped_start = position_map[cs];
@@ -1281,16 +1384,20 @@ fn truncate_preview(preview: &CleanPreview, max_chars: u32) -> FfiRenderedPrevie
         byte_end = i + ch.len_utf8();
     }
     let truncated_text = preview.clean_text[..byte_end].to_string();
+    let truncated_length = truncated_text.encode_utf16().count() as u32;
 
     let mut truncated_spans: Vec<FfiPreviewSpan> = preview
         .clean_spans
         .iter()
-        .filter(|s| s.start < max_chars)
+        .filter(|s| {
+            s.start < truncated_length
+                && (!matches!(s.span_type, FfiInlineType::Math { .. }) || s.end <= truncated_length)
+        })
         .cloned()
         .collect();
     for span in &mut truncated_spans {
-        if span.end > max_chars {
-            span.end = max_chars;
+        if span.end > truncated_length {
+            span.end = truncated_length;
         }
     }
 

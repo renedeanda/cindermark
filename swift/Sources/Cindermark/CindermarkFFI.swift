@@ -500,6 +500,8 @@ public protocol CindermarkParserProtocol : AnyObject {
     
     func extractWikiLinks(text: String)  -> [String]
     
+    func listItemRanges(text: String)  -> [ListItemRange]
+    
     func parse(text: String)  -> FfiParseResult
     
     func parseEditable(text: String)  -> FfiParseResult
@@ -515,6 +517,8 @@ public protocol CindermarkParserProtocol : AnyObject {
     func renderPreviews(text: String, shortMax: UInt32, longMax: UInt32)  -> [FfiRenderedPreview]
     
     func resetState() 
+    
+    func resourceReferences(text: String)  -> [ResourceReference]
     
     func toggleCheckbox(text: String, lineIndex: UInt32)  -> String
     
@@ -581,6 +585,14 @@ public convenience init(imageMarkerScheme: String? = nil) {
 open func extractWikiLinks(text: String) -> [String] {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
     uniffi_cindermark_fn_method_cindermarkparser_extract_wiki_links(self.uniffiClonePointer(),
+        FfiConverterString.lower(text),$0
+    )
+})
+}
+    
+open func listItemRanges(text: String) -> [ListItemRange] {
+    return try!  FfiConverterSequenceTypeListItemRange.lift(try! rustCall() {
+    uniffi_cindermark_fn_method_cindermarkparser_list_item_ranges(self.uniffiClonePointer(),
         FfiConverterString.lower(text),$0
     )
 })
@@ -659,6 +671,14 @@ open func resetState() {try! rustCall() {
 }
 }
     
+open func resourceReferences(text: String) -> [ResourceReference] {
+    return try!  FfiConverterSequenceTypeResourceReference.lift(try! rustCall() {
+    uniffi_cindermark_fn_method_cindermarkparser_resource_references(self.uniffiClonePointer(),
+        FfiConverterString.lower(text),$0
+    )
+})
+}
+    
 open func toggleCheckbox(text: String, lineIndex: UInt32) -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_cindermark_fn_method_cindermarkparser_toggle_checkbox(self.uniffiClonePointer(),
@@ -724,6 +744,7 @@ public func FfiConverterTypeCindermarkParser_lower(_ value: CindermarkParser) ->
 
 
 public struct FfiBlock {
+    public let tableCells: [FfiTableCell]
     public let blockType: FfiBlockType
     public let lineStart: UInt32
     public let lineEnd: UInt32
@@ -749,7 +770,8 @@ public struct FfiBlock {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(blockType: FfiBlockType, lineStart: UInt32, lineEnd: UInt32, utf16Start: UInt32, utf16End: UInt32, listIndent: UInt32, markerUtf16Start: UInt32, markerUtf16End: UInt32, markerSource: String, unorderedMarker: String, orderedDelimiter: String, orderedRawNumber: String, headingLevel: UInt8, number: UInt32, isChecked: Bool, language: String?, text: String, inlineSpans: [FfiInlineSpan], listItems: [FfiListItem], tableHeaders: [String], tableRows: [[String]], tableAlignments: [UInt8]) {
+    public init(tableCells: [FfiTableCell], blockType: FfiBlockType, lineStart: UInt32, lineEnd: UInt32, utf16Start: UInt32, utf16End: UInt32, listIndent: UInt32, markerUtf16Start: UInt32, markerUtf16End: UInt32, markerSource: String, unorderedMarker: String, orderedDelimiter: String, orderedRawNumber: String, headingLevel: UInt8, number: UInt32, isChecked: Bool, language: String?, text: String, inlineSpans: [FfiInlineSpan], listItems: [FfiListItem], tableHeaders: [String], tableRows: [[String]], tableAlignments: [UInt8]) {
+        self.tableCells = tableCells
         self.blockType = blockType
         self.lineStart = lineStart
         self.lineEnd = lineEnd
@@ -779,6 +801,9 @@ public struct FfiBlock {
 
 extension FfiBlock: Equatable, Hashable {
     public static func ==(lhs: FfiBlock, rhs: FfiBlock) -> Bool {
+        if lhs.tableCells != rhs.tableCells {
+            return false
+        }
         if lhs.blockType != rhs.blockType {
             return false
         }
@@ -849,6 +874,7 @@ extension FfiBlock: Equatable, Hashable {
     }
 
     public func hash(into hasher: inout Hasher) {
+        hasher.combine(tableCells)
         hasher.combine(blockType)
         hasher.combine(lineStart)
         hasher.combine(lineEnd)
@@ -882,6 +908,7 @@ public struct FfiConverterTypeFfiBlock: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiBlock {
         return
             try FfiBlock(
+                tableCells: FfiConverterSequenceTypeFfiTableCell.read(from: &buf), 
                 blockType: FfiConverterTypeFfiBlockType.read(from: &buf), 
                 lineStart: FfiConverterUInt32.read(from: &buf), 
                 lineEnd: FfiConverterUInt32.read(from: &buf), 
@@ -908,6 +935,7 @@ public struct FfiConverterTypeFfiBlock: FfiConverterRustBuffer {
     }
 
     public static func write(_ value: FfiBlock, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeFfiTableCell.write(value.tableCells, into: &buf)
         FfiConverterTypeFfiBlockType.write(value.blockType, into: &buf)
         FfiConverterUInt32.write(value.lineStart, into: &buf)
         FfiConverterUInt32.write(value.lineEnd, into: &buf)
@@ -1824,6 +1852,324 @@ public func FfiConverterTypeFfiSaveParseResult_lower(_ value: FfiSaveParseResult
     return FfiConverterTypeFfiSaveParseResult.lower(value)
 }
 
+
+public struct FfiTableCell {
+    public let row: UInt32
+    public let column: UInt32
+    public let utf16Start: UInt32
+    public let utf16End: UInt32
+    public let inlineSpans: [FfiInlineSpan]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(row: UInt32, column: UInt32, utf16Start: UInt32, utf16End: UInt32, inlineSpans: [FfiInlineSpan]) {
+        self.row = row
+        self.column = column
+        self.utf16Start = utf16Start
+        self.utf16End = utf16End
+        self.inlineSpans = inlineSpans
+    }
+}
+
+
+
+extension FfiTableCell: Equatable, Hashable {
+    public static func ==(lhs: FfiTableCell, rhs: FfiTableCell) -> Bool {
+        if lhs.row != rhs.row {
+            return false
+        }
+        if lhs.column != rhs.column {
+            return false
+        }
+        if lhs.utf16Start != rhs.utf16Start {
+            return false
+        }
+        if lhs.utf16End != rhs.utf16End {
+            return false
+        }
+        if lhs.inlineSpans != rhs.inlineSpans {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(row)
+        hasher.combine(column)
+        hasher.combine(utf16Start)
+        hasher.combine(utf16End)
+        hasher.combine(inlineSpans)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTableCell: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTableCell {
+        return
+            try FfiTableCell(
+                row: FfiConverterUInt32.read(from: &buf), 
+                column: FfiConverterUInt32.read(from: &buf), 
+                utf16Start: FfiConverterUInt32.read(from: &buf), 
+                utf16End: FfiConverterUInt32.read(from: &buf), 
+                inlineSpans: FfiConverterSequenceTypeFfiInlineSpan.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTableCell, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.row, into: &buf)
+        FfiConverterUInt32.write(value.column, into: &buf)
+        FfiConverterUInt32.write(value.utf16Start, into: &buf)
+        FfiConverterUInt32.write(value.utf16End, into: &buf)
+        FfiConverterSequenceTypeFfiInlineSpan.write(value.inlineSpans, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTableCell_lift(_ buf: RustBuffer) throws -> FfiTableCell {
+    return try FfiConverterTypeFfiTableCell.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTableCell_lower(_ value: FfiTableCell) -> RustBuffer {
+    return FfiConverterTypeFfiTableCell.lower(value)
+}
+
+
+public struct ListItemRange {
+    public let byteStart: UInt32
+    public let byteEnd: UInt32
+    public let utf16Start: UInt32
+    public let utf16End: UInt32
+    public let markerUtf16Start: UInt32
+    public let markerUtf16End: UInt32
+    public let indentColumns: UInt32
+    public let parentIndex: UInt32?
+    public let siblingGroup: UInt32
+    public let checked: Bool?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(byteStart: UInt32, byteEnd: UInt32, utf16Start: UInt32, utf16End: UInt32, markerUtf16Start: UInt32, markerUtf16End: UInt32, indentColumns: UInt32, parentIndex: UInt32?, siblingGroup: UInt32, checked: Bool?) {
+        self.byteStart = byteStart
+        self.byteEnd = byteEnd
+        self.utf16Start = utf16Start
+        self.utf16End = utf16End
+        self.markerUtf16Start = markerUtf16Start
+        self.markerUtf16End = markerUtf16End
+        self.indentColumns = indentColumns
+        self.parentIndex = parentIndex
+        self.siblingGroup = siblingGroup
+        self.checked = checked
+    }
+}
+
+
+
+extension ListItemRange: Equatable, Hashable {
+    public static func ==(lhs: ListItemRange, rhs: ListItemRange) -> Bool {
+        if lhs.byteStart != rhs.byteStart {
+            return false
+        }
+        if lhs.byteEnd != rhs.byteEnd {
+            return false
+        }
+        if lhs.utf16Start != rhs.utf16Start {
+            return false
+        }
+        if lhs.utf16End != rhs.utf16End {
+            return false
+        }
+        if lhs.markerUtf16Start != rhs.markerUtf16Start {
+            return false
+        }
+        if lhs.markerUtf16End != rhs.markerUtf16End {
+            return false
+        }
+        if lhs.indentColumns != rhs.indentColumns {
+            return false
+        }
+        if lhs.parentIndex != rhs.parentIndex {
+            return false
+        }
+        if lhs.siblingGroup != rhs.siblingGroup {
+            return false
+        }
+        if lhs.checked != rhs.checked {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(byteStart)
+        hasher.combine(byteEnd)
+        hasher.combine(utf16Start)
+        hasher.combine(utf16End)
+        hasher.combine(markerUtf16Start)
+        hasher.combine(markerUtf16End)
+        hasher.combine(indentColumns)
+        hasher.combine(parentIndex)
+        hasher.combine(siblingGroup)
+        hasher.combine(checked)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeListItemRange: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ListItemRange {
+        return
+            try ListItemRange(
+                byteStart: FfiConverterUInt32.read(from: &buf), 
+                byteEnd: FfiConverterUInt32.read(from: &buf), 
+                utf16Start: FfiConverterUInt32.read(from: &buf), 
+                utf16End: FfiConverterUInt32.read(from: &buf), 
+                markerUtf16Start: FfiConverterUInt32.read(from: &buf), 
+                markerUtf16End: FfiConverterUInt32.read(from: &buf), 
+                indentColumns: FfiConverterUInt32.read(from: &buf), 
+                parentIndex: FfiConverterOptionUInt32.read(from: &buf), 
+                siblingGroup: FfiConverterUInt32.read(from: &buf), 
+                checked: FfiConverterOptionBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ListItemRange, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.byteStart, into: &buf)
+        FfiConverterUInt32.write(value.byteEnd, into: &buf)
+        FfiConverterUInt32.write(value.utf16Start, into: &buf)
+        FfiConverterUInt32.write(value.utf16End, into: &buf)
+        FfiConverterUInt32.write(value.markerUtf16Start, into: &buf)
+        FfiConverterUInt32.write(value.markerUtf16End, into: &buf)
+        FfiConverterUInt32.write(value.indentColumns, into: &buf)
+        FfiConverterOptionUInt32.write(value.parentIndex, into: &buf)
+        FfiConverterUInt32.write(value.siblingGroup, into: &buf)
+        FfiConverterOptionBool.write(value.checked, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeListItemRange_lift(_ buf: RustBuffer) throws -> ListItemRange {
+    return try FfiConverterTypeListItemRange.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeListItemRange_lower(_ value: ListItemRange) -> RustBuffer {
+    return FfiConverterTypeListItemRange.lower(value)
+}
+
+
+public struct ResourceReference {
+    public let utf16Start: UInt32
+    public let utf16End: UInt32
+    public let labelUtf16Start: UInt32
+    public let labelUtf16End: UInt32
+    public let destination: String
+    public let isImage: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(utf16Start: UInt32, utf16End: UInt32, labelUtf16Start: UInt32, labelUtf16End: UInt32, destination: String, isImage: Bool) {
+        self.utf16Start = utf16Start
+        self.utf16End = utf16End
+        self.labelUtf16Start = labelUtf16Start
+        self.labelUtf16End = labelUtf16End
+        self.destination = destination
+        self.isImage = isImage
+    }
+}
+
+
+
+extension ResourceReference: Equatable, Hashable {
+    public static func ==(lhs: ResourceReference, rhs: ResourceReference) -> Bool {
+        if lhs.utf16Start != rhs.utf16Start {
+            return false
+        }
+        if lhs.utf16End != rhs.utf16End {
+            return false
+        }
+        if lhs.labelUtf16Start != rhs.labelUtf16Start {
+            return false
+        }
+        if lhs.labelUtf16End != rhs.labelUtf16End {
+            return false
+        }
+        if lhs.destination != rhs.destination {
+            return false
+        }
+        if lhs.isImage != rhs.isImage {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(utf16Start)
+        hasher.combine(utf16End)
+        hasher.combine(labelUtf16Start)
+        hasher.combine(labelUtf16End)
+        hasher.combine(destination)
+        hasher.combine(isImage)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeResourceReference: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ResourceReference {
+        return
+            try ResourceReference(
+                utf16Start: FfiConverterUInt32.read(from: &buf), 
+                utf16End: FfiConverterUInt32.read(from: &buf), 
+                labelUtf16Start: FfiConverterUInt32.read(from: &buf), 
+                labelUtf16End: FfiConverterUInt32.read(from: &buf), 
+                destination: FfiConverterString.read(from: &buf), 
+                isImage: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ResourceReference, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.utf16Start, into: &buf)
+        FfiConverterUInt32.write(value.utf16End, into: &buf)
+        FfiConverterUInt32.write(value.labelUtf16Start, into: &buf)
+        FfiConverterUInt32.write(value.labelUtf16End, into: &buf)
+        FfiConverterString.write(value.destination, into: &buf)
+        FfiConverterBool.write(value.isImage, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeResourceReference_lift(_ buf: RustBuffer) throws -> ResourceReference {
+    return try FfiConverterTypeResourceReference.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeResourceReference_lower(_ value: ResourceReference) -> RustBuffer {
+    return FfiConverterTypeResourceReference.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -1847,6 +2193,9 @@ public enum FfiBlockType {
     )
     case mermaidDiagram(diagramType: UInt8
     )
+    case math(syntax: UInt8, quoteDepth: UInt32, listKind: UInt8, listContentIndent: UInt32, contentUtf16Start: UInt32, contentUtf16End: UInt32
+    )
+    case rawHtml
 }
 
 
@@ -1893,6 +2242,11 @@ public struct FfiConverterTypeFfiBlockType: FfiConverterRustBuffer {
         
         case 16: return .mermaidDiagram(diagramType: try FfiConverterUInt8.read(from: &buf)
         )
+        
+        case 17: return .math(syntax: try FfiConverterUInt8.read(from: &buf), quoteDepth: try FfiConverterUInt32.read(from: &buf), listKind: try FfiConverterUInt8.read(from: &buf), listContentIndent: try FfiConverterUInt32.read(from: &buf), contentUtf16Start: try FfiConverterUInt32.read(from: &buf), contentUtf16End: try FfiConverterUInt32.read(from: &buf)
+        )
+        
+        case 18: return .rawHtml
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -1967,6 +2321,20 @@ public struct FfiConverterTypeFfiBlockType: FfiConverterRustBuffer {
             writeInt(&buf, Int32(16))
             FfiConverterUInt8.write(diagramType, into: &buf)
             
+        
+        case let .math(syntax,quoteDepth,listKind,listContentIndent,contentUtf16Start,contentUtf16End):
+            writeInt(&buf, Int32(17))
+            FfiConverterUInt8.write(syntax, into: &buf)
+            FfiConverterUInt32.write(quoteDepth, into: &buf)
+            FfiConverterUInt8.write(listKind, into: &buf)
+            FfiConverterUInt32.write(listContentIndent, into: &buf)
+            FfiConverterUInt32.write(contentUtf16Start, into: &buf)
+            FfiConverterUInt32.write(contentUtf16End, into: &buf)
+            
+        
+        case .rawHtml:
+            writeInt(&buf, Int32(18))
+        
         }
     }
 }
@@ -2018,6 +2386,9 @@ public enum FfiInlineType {
     case comment
     case hexColor(hex: String
     )
+    case underlinePlus
+    case math(expression: String
+    )
 }
 
 
@@ -2066,6 +2437,11 @@ public struct FfiConverterTypeFfiInlineType: FfiConverterRustBuffer {
         case 15: return .comment
         
         case 16: return .hexColor(hex: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 17: return .underlinePlus
+        
+        case 18: return .math(expression: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -2144,6 +2520,15 @@ public struct FfiConverterTypeFfiInlineType: FfiConverterRustBuffer {
             writeInt(&buf, Int32(16))
             FfiConverterString.write(hex, into: &buf)
             
+        
+        case .underlinePlus:
+            writeInt(&buf, Int32(17))
+        
+        
+        case let .math(expression):
+            writeInt(&buf, Int32(18))
+            FfiConverterString.write(expression, into: &buf)
+            
         }
     }
 }
@@ -2168,6 +2553,54 @@ public func FfiConverterTypeFfiInlineType_lower(_ value: FfiInlineType) -> RustB
 extension FfiInlineType: Equatable, Hashable {}
 
 
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2396,6 +2829,81 @@ fileprivate struct FfiConverterSequenceTypeFfiRenderedPreview: FfiConverterRustB
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiTableCell: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiTableCell]
+
+    public static func write(_ value: [FfiTableCell], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiTableCell.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiTableCell] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiTableCell]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiTableCell.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeListItemRange: FfiConverterRustBuffer {
+    typealias SwiftType = [ListItemRange]
+
+    public static func write(_ value: [ListItemRange], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeListItemRange.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ListItemRange] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ListItemRange]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeListItemRange.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeResourceReference: FfiConverterRustBuffer {
+    typealias SwiftType = [ResourceReference]
+
+    public static func write(_ value: [ResourceReference], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeResourceReference.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ResourceReference] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ResourceReference]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeResourceReference.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [[String]]
 
@@ -2436,6 +2944,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_cindermark_checksum_method_cindermarkparser_extract_wiki_links() != 56235) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_cindermark_checksum_method_cindermarkparser_list_item_ranges() != 62019) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_cindermark_checksum_method_cindermarkparser_parse() != 5574) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2458,6 +2969,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_cindermark_checksum_method_cindermarkparser_reset_state() != 18608) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cindermark_checksum_method_cindermarkparser_resource_references() != 14802) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_cindermark_checksum_method_cindermarkparser_toggle_checkbox() != 24460) {

@@ -1,8 +1,4 @@
 //! AST node types for the Cindermark Markdown parser.
-//!
-//! Designed for cache-friendly traversal: `InlineSpan` is 28 bytes (fits 2 per
-//! 64-byte L1 cache line), `BlockNode` fields are accessed sequentially during
-//! style application. All string data is borrowed from the source text.
 
 /// A parsed markdown document.
 #[derive(Debug, Clone)]
@@ -31,6 +27,16 @@ pub struct BlockNode {
     /// list identity and ordered-list start behavior.
     pub list_marker: Option<ListMarkerMeta>,
     /// Inline formatting spans within this block.
+    pub inline_spans: Vec<InlineSpan>,
+    pub table_cells: Vec<TableCell>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableCell {
+    pub row: u32,
+    pub column: u32,
+    pub utf16_start: u32,
+    pub utf16_end: u32,
     pub inline_spans: Vec<InlineSpan>,
 }
 
@@ -66,6 +72,15 @@ pub struct ListMarkerMeta {
 /// Block-level node kind with associated metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockKind {
+    Math {
+        expression: String,
+        syntax: MathSyntax,
+        quote_depth: u32,
+        list_context: Option<MathListContext>,
+        info_string: Option<String>,
+        content_utf16_start: u32,
+        content_utf16_end: u32,
+    },
     Heading {
         level: u8,
         text: String,
@@ -131,6 +146,25 @@ pub enum BlockKind {
         number: u32,
         text: String,
     },
+    /// Exact opaque source, including original line endings; never executable output.
+    RawHtml {
+        source: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MathSyntax {
+    Dollars = 0,
+    Fence = 1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MathListContext {
+    pub content_indent: u32,
+    /// 1: bullet, 2: ordered, 3: unchecked task, 4: checked task.
+    pub kind: u8,
+    pub number: u32,
 }
 
 /// Mermaid diagram type, classified from the first non-blank content line of
@@ -288,6 +322,22 @@ pub struct ListItem {
     pub inline_spans: Vec<InlineSpan>,
 }
 
+/// Source envelope of an editable list item, including owned continuation blocks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListItemRange {
+    pub byte_start: u32,
+    pub byte_end: u32,
+    pub utf16_start: u32,
+    pub utf16_end: u32,
+    pub marker_utf16_start: u32,
+    pub marker_utf16_end: u32,
+    pub indent_columns: u32,
+    /// Indices address this result only; they are not persistent identities.
+    pub parent_index: Option<u32>,
+    pub sibling_group: u32,
+    pub checked: Option<bool>,
+}
+
 /// An inline formatting span — 28 bytes for cache-friendly traversal.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InlineSpan {
@@ -340,6 +390,10 @@ pub enum InlineKind {
     /// Swift re-reads the source to recover the alpha channel if needed).
     HexColor {
         hex: String,
+    },
+    UnderlinePlus,
+    Math {
+        expression: String,
     },
 }
 

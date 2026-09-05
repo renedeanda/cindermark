@@ -21,7 +21,8 @@ Most Markdown parsers are built for rendering documents. Cindermark is built for
 
 ## Syntax support
 
-CommonMark core plus the extensions a notes app actually needs:
+CommonMark 0.31.2-oriented syntax with explicit extensions. This is not a claim
+of complete CommonMark or GFM conformance; see the [compatibility profile](docs/compatibility.md).
 
 | Category | Supported |
 |---|---|
@@ -31,7 +32,9 @@ CommonMark core plus the extensions a notes app actually needs:
 
 **New in 0.2.0:** **nested lists** — bullets, ordered lists, and checkboxes indented for nesting (up to 32 tab-expanded columns) now parse as nested items instead of degrading to indented code (column-based; see [Known limitations](#known-limitations)) — plus a **WebAssembly build** (`wasm` feature) that powers the [live browser playground](https://embernotes.app/cindermark).
 
-Everything is covered by **457 tests**, including checks that every incremental parse result must equal the equivalent full parse.
+The test suite includes incremental/full-parse parity checks and malformed-input
+properties. Source version 0.3.0 is under development; the published installation
+examples below continue to target 0.2.0.
 
 ## Using from Swift (iOS / macOS)
 

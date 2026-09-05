@@ -29,14 +29,14 @@ impl WasmParser {
         }
     }
 
-    /// Full editable parse. JSON: `{"blocks":[…],"lineCount":n,"stats":{…}}`.
+    /// Full editable parse with `schema_version: 2`, blocks, line count and stats.
     /// Also primes the incremental snapshot, so `keystroke` calls that follow
     /// re-parse only the dirty block window.
     #[wasm_bindgen(js_name = parseJson)]
     pub fn parse_json(&self, text: String) -> String {
         let result = self.inner.parse_editable(text);
         let mut out = String::with_capacity(result.blocks.len() * 96 + 256);
-        out.push_str("{\"blocks\":[");
+        out.push_str("{\"schema_version\":2,\"blocks\":[");
         push_blocks(&mut out, &result.blocks);
         out.push_str("],\"lineCount\":");
         push_u32(&mut out, result.line_count);
@@ -74,7 +74,7 @@ impl WasmParser {
             edit_new_utf16_len,
         );
         let mut out = String::with_capacity(96);
-        out.push_str("{\"dirtyStart\":");
+        out.push_str("{\"schema_version\":2,\"dirtyStart\":");
         push_u32(&mut out, update.dirty_start);
         out.push_str(",\"dirtyEnd\":");
         push_u32(&mut out, update.dirty_end);
@@ -98,6 +98,52 @@ impl WasmParser {
     pub fn toggle_checkbox(&self, text: String, line_index: u32) -> String {
         self.inner.toggle_checkbox(text, line_index)
     }
+
+    #[wasm_bindgen(js_name = listItemRangesJson)]
+    pub fn list_item_ranges_json(&self, text: String) -> String {
+        use std::fmt::Write;
+        let items = self.inner.list_item_ranges(text);
+        let mut out = String::from("{\"schema_version\":2,\"items\":[");
+        for (index, item) in items.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            let parent = item
+                .parent_index
+                .map_or_else(|| "null".into(), |value| value.to_string());
+            let checked = item
+                .checked
+                .map_or_else(|| "null".into(), |value| value.to_string());
+            let _ = write!(out, "{{\"byteStart\":{},\"byteEnd\":{},\"utf16Start\":{},\"utf16End\":{},\"markerUtf16Start\":{},\"markerUtf16End\":{},\"indentColumns\":{},\"parentIndex\":{},\"siblingGroup\":{},\"checked\":{}}}",
+                item.byte_start, item.byte_end, item.utf16_start, item.utf16_end,
+                item.marker_utf16_start, item.marker_utf16_end, item.indent_columns,
+                parent, item.sibling_group, checked);
+        }
+        out.push_str("]}");
+        out
+    }
+}
+
+#[wasm_bindgen]
+impl WasmParser {
+    #[wasm_bindgen(js_name = resourceReferencesJson)]
+    pub fn resource_references_json(&self, text: String) -> String {
+        use std::fmt::Write;
+        let references = self.inner.resource_references(text);
+        let mut out = String::from("{\"schema_version\":2,\"references\":[");
+        for (index, reference) in references.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "{{\"utf16Start\":{},\"utf16End\":{},\"labelUtf16Start\":{},\"labelUtf16End\":{},\"isImage\":{},\"destination\":",
+                reference.utf16_start, reference.utf16_end, reference.label_utf16_start,
+                reference.label_utf16_end, reference.is_image);
+            push_json_string(&mut out, &reference.destination);
+            out.push('}');
+        }
+        out.push_str("]}");
+        out
+    }
 }
 
 impl Default for WasmParser {
@@ -115,6 +161,33 @@ fn push_blocks(out: &mut String, blocks: &[FfiBlock]) {
         out.push_str(block_type_name(&block.block_type));
         out.push('"');
         match &block.block_type {
+            FfiBlockType::RawHtml => {
+                out.push_str(",\"source\":");
+                push_json_string(out, &block.text);
+            }
+            FfiBlockType::Math {
+                syntax,
+                quote_depth,
+                list_kind,
+                list_content_indent,
+                content_utf16_start,
+                content_utf16_end,
+            } => {
+                out.push_str(",\"syntax\":");
+                push_json_string(out, if *syntax == 0 { "dollars" } else { "fence" });
+                out.push_str(",\"expression\":");
+                push_json_string(out, &block.text);
+                out.push_str(",\"contentStart\":");
+                push_u32(out, *content_utf16_start);
+                out.push_str(",\"contentEnd\":");
+                push_u32(out, *content_utf16_end);
+                out.push_str(",\"quoteDepth\":");
+                push_u32(out, *quote_depth);
+                out.push_str(",\"listKind\":");
+                push_u32(out, u32::from(*list_kind));
+                out.push_str(",\"listContentIndent\":");
+                push_u32(out, *list_content_indent);
+            }
             FfiBlockType::Heading => {
                 out.push_str(",\"level\":");
                 push_u32(out, u32::from(block.heading_level));
@@ -155,6 +228,23 @@ fn push_blocks(out: &mut String, blocks: &[FfiBlock]) {
         push_u32(out, block.list_indent);
         out.push_str(",\"spans\":[");
         push_spans(out, &block.inline_spans);
+        out.push_str("],\"tableCells\":[");
+        for (index, cell) in block.table_cells.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"row\":");
+            push_u32(out, cell.row);
+            out.push_str(",\"column\":");
+            push_u32(out, cell.column);
+            out.push_str(",\"start\":");
+            push_u32(out, cell.utf16_start);
+            out.push_str(",\"end\":");
+            push_u32(out, cell.utf16_end);
+            out.push_str(",\"spans\":[");
+            push_spans(out, &cell.inline_spans);
+            out.push_str("]}");
+        }
         out.push_str("]}");
     }
 }
@@ -168,6 +258,12 @@ fn push_spans(out: &mut String, spans: &[FfiInlineSpan]) {
         out.push_str(inline_type_name(&span.inline_type));
         out.push('"');
         match &span.inline_type {
+            FfiInlineType::Math { expression } => {
+                out.push_str(",\"expression\":");
+                push_json_string(out, expression);
+                out.push_str(",\"syntax\":\"dollars\"");
+            }
+            FfiInlineType::UnderlinePlus => out.push_str(",\"syntax\":\"plus\""),
             FfiInlineType::Link { url } | FfiInlineType::AutoLink { url } => {
                 out.push_str(",\"url\":");
                 push_json_string(out, url);
@@ -212,6 +308,8 @@ fn block_type_name(block_type: &FfiBlockType) -> &'static str {
         FfiBlockType::NumberedItem => "numberedItem",
         FfiBlockType::Callout { .. } => "callout",
         FfiBlockType::MermaidDiagram { .. } => "mermaid",
+        FfiBlockType::Math { .. } => "math",
+        FfiBlockType::RawHtml => "rawHtml",
     }
 }
 
@@ -221,7 +319,10 @@ fn inline_type_name(inline_type: &FfiInlineType) -> &'static str {
         FfiInlineType::Italic => "italic",
         FfiInlineType::BoldItalic => "boldItalic",
         FfiInlineType::Strikethrough => "strike",
-        FfiInlineType::UnderlineTilde | FfiInlineType::UnderlineHtml => "underline",
+        FfiInlineType::UnderlineTilde
+        | FfiInlineType::UnderlineHtml
+        | FfiInlineType::UnderlinePlus => "underline",
+        FfiInlineType::Math { .. } => "math",
         FfiInlineType::InlineCode => "code",
         FfiInlineType::Highlight
         | FfiInlineType::HighlightColor { .. }
@@ -281,7 +382,9 @@ mod tests {
     fn parse_json_shape_is_valid_and_typed() {
         let parser = WasmParser::new();
         let json = parser.parse_json("# Hi\n\nSome **bold** text.\n".to_string());
-        assert!(json.starts_with("{\"blocks\":[{\"type\":\"heading\",\"level\":1"));
+        assert!(
+            json.starts_with("{\"schema_version\":2,\"blocks\":[{\"type\":\"heading\",\"level\":1")
+        );
         assert!(json.contains("\"type\":\"bold\""));
         assert!(json.contains("\"stats\":{\"words\":"));
     }
@@ -302,5 +405,42 @@ mod tests {
         let mut out = String::new();
         push_json_string(&mut out, "a\"b\\c\nd");
         assert_eq!(out, "\"a\\\"b\\\\c\\nd\"");
+    }
+
+    #[test]
+    fn math_and_table_json_preserve_source_metadata() {
+        let parser = WasmParser::new();
+        let json = parser.parse_json("$$x$$\n\n| ++a++ | $\\alpha$ |\n| --- | --- |".into());
+        assert!(json.contains("\"schema_version\":2"));
+        assert!(json.contains("\"syntax\":\"dollars\""));
+        assert!(json.contains("\"expression\":\"x\""));
+        assert!(json.contains("\"tableCells\":[{\"row\":0,\"column\":0"));
+        assert!(json.contains("\"syntax\":\"plus\""));
+        assert!(json.contains("\"expression\":\"\\\\alpha\""));
+        let quoted = parser.parse_json("> $$x$$".into());
+        assert!(quoted.contains("\"quoteDepth\":1"));
+    }
+
+    #[test]
+    fn raw_html_json_preserves_source_without_math_spans() {
+        let json = WasmParser::new().parse_json("<script>\r\n$$x$$\r\n</script>".into());
+        assert!(json.contains("\"type\":\"rawHtml\""));
+        assert!(json.contains("<script>\\r\\n$$x$$\\r\\n</script>"));
+        assert!(!json.contains("\"type\":\"math\""));
+    }
+
+    #[test]
+    fn list_ranges_json_retains_nullable_task_and_parent_identity() {
+        let json = WasmParser::new().list_item_ranges_json("- parent\n  - [x] child\n".into());
+        assert!(json.contains("\"parentIndex\":null,\"siblingGroup\":0,\"checked\":null"));
+        assert!(json.contains("\"parentIndex\":0,\"siblingGroup\":1,\"checked\":true"));
+        assert!(json.contains("\"utf16Start\":9,\"utf16End\":23"));
+    }
+
+    #[test]
+    fn resource_json_preserves_image_identity_and_escapes_destination() {
+        let json = WasmParser::new().resource_references_json("😀 ![x](a\"b.png)".into());
+        assert!(json.contains("\"utf16Start\":3"));
+        assert!(json.contains("\"isImage\":true,\"destination\":\"a\\\"b.png\""));
     }
 }

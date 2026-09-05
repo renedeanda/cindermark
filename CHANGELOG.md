@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- On-demand inline resource references with exact UTF-16 source/label ranges,
+  raw destinations and image identity through Rust, UniFFI and WASM.
+- On-demand list subtree source ranges, parent/sibling identities and task state
+  through Rust, UniFFI and WASM, without replacing incremental snapshots.
+- Bounded repeated list/quote projection for math and raw HTML, including
+  continuation lines, sibling boundaries and quote-marker tab columns.
+- Opaque top-level HTML blocks with exact source, appended UniFFI `RawHtml`,
+  WASM transport and literal preview fallback.
+- List/quote-contained HTML shares math's container projection, preserving raw
+  prefixes and marker metadata without consuming adjacent siblings.
+- 0.3.0 development: plus-delimited underline and opaque inline/display/fenced
+  math, UTF-16 table-cell spans, and WASM schema version 2 metadata.
+- Source-range, malformed-input, Unicode and incremental-edit regression tests.
+- List-contained math with ordered/task identity, continuation indentation and
+  source-backed marker metadata.
+
+### Changed
+- Source version is 0.3.0 because new exhaustive Rust/UniFFI enum variants and
+  record fields require consumer updates. No publication or tag is implied.
+- Backlink extraction uses parsed spans, including in table cells, so code and
+  math cannot create links from their literal content.
+- The compatibility profile explicitly distinguishes extensions and incomplete
+  conformance from the CommonMark baseline.
+
 ### Fixed
+- Inline HTML comments, processing instructions, declarations and CDATA no longer
+  expose plus underline or dollar math; repeated unclosed forms use bounded scans.
+- Preview formatting no longer pairs across separate blocks; math keeps readable
+  fallback and truncated spans stay within surrogate-safe text bounds.
+- Dollar-math closing indentation is bounded, and TeX body lines remain opaque.
 - Configured attachment markers now interrupt adjacent paragraphs without requiring blank lines.
 
 ## [0.2.0] - 2026-07-22

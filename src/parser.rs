@@ -1,13 +1,6 @@
 #![allow(clippy::manual_strip)]
-//! Block-level parser producing a `Document` from source text.
-//!
-//! Matches the exact semantics of `MarkdownParser.swift`:
-//! - Same block detection priority order
-//! - Same line grouping rules for lists, blockquotes, paragraphs
-//! - Two parse modes: Grouped (for rendering) and Editable (for block editor)
-//!
-//! Operates on raw source bytes with line-oriented scanning. The inline parser
-//! (`inline.rs`) runs on each block's text content after block parsing.
+//! Source-preserving block parser with grouped and editable modes.
+//! Inline spans are added after block boundaries are known.
 
 use crate::ast::*;
 use crate::inline;
@@ -40,6 +33,7 @@ struct ParsedListMarker<'a> {
     marker_start: usize,
     marker_end: usize,
     content_start: usize,
+    container_content_start: usize,
     marker_source: &'a str,
     unordered_marker: Option<char>,
     ordered_delimiter: Option<char>,
@@ -67,6 +61,87 @@ pub fn parse(source: &str, mode: ParseMode) -> Document {
     parse_with_options(source, mode, &ParseOptions::default())
 }
 
+/// On-demand list ownership for source edits, independent of incremental snapshots.
+pub fn list_item_ranges(source: &str, options: &ParseOptions) -> Vec<ListItemRange> {
+    let document = parse_with_options(source, ParseMode::Editable, options);
+    let mut items: Vec<ListItemRange> = Vec::new();
+    let mut marker_kinds = Vec::new();
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    for block in &document.blocks {
+        if matches!(block.kind, BlockKind::Empty) {
+            continue;
+        }
+        let raw = &source[block.byte_start as usize..block.byte_end as usize];
+        let first_line = raw.lines().next().unwrap_or("");
+        let marker = block.list_marker.as_ref().and_then(|meta| {
+            parse_list_marker(first_line)
+                .filter(|marker| {
+                    block.byte_start as usize + marker.marker_start
+                        == meta.marker_byte_start as usize
+                })
+                .map(|marker| (marker, meta))
+        });
+        if let Some((marker, meta)) = marker {
+            let indent = column_width(&first_line[..marker.marker_start]);
+            let mut previous = None;
+            while stack
+                .last()
+                .is_some_and(|&(index, _)| items[index].indent_columns as usize >= indent)
+            {
+                previous = stack.pop().map(|(index, _)| index);
+            }
+            let parent_index = stack.last().map(|&(index, _)| index as u32);
+            let index = items.len();
+            let marker_kind = (marker.unordered_marker, marker.ordered_delimiter);
+            let sibling_group = previous
+                .filter(|&previous| {
+                    items[previous].indent_columns as usize == indent
+                        && items[previous].parent_index == parent_index
+                        && marker_kinds[previous] == marker_kind
+                })
+                .map_or(index as u32, |previous| items[previous].sibling_group);
+            marker_kinds.push(marker_kind);
+            items.push(ListItemRange {
+                byte_start: block.byte_start,
+                byte_end: block.byte_end,
+                utf16_start: block.utf16_start,
+                utf16_end: block.utf16_end,
+                marker_utf16_start: meta.marker_utf16_start,
+                marker_utf16_end: meta.marker_utf16_end,
+                indent_columns: indent as u32,
+                parent_index,
+                sibling_group,
+                checked: match marker.kind {
+                    ParsedListKind::Checkbox(checked) => Some(checked),
+                    _ => None,
+                },
+            });
+            stack.push((
+                index,
+                column_width(&first_line[..marker.container_content_start]),
+            ));
+        } else {
+            let prefix = first_line
+                .bytes()
+                .take_while(|b| matches!(b, b' ' | b'\t'))
+                .count();
+            let indent = column_width(&first_line[..prefix]);
+            while stack
+                .last()
+                .is_some_and(|&(_, content_indent)| indent < content_indent)
+            {
+                stack.pop();
+            }
+        }
+        // Nesting is bounded by the parser's 32-column marker limit.
+        for &(index, _) in &stack {
+            items[index].byte_end = block.byte_end;
+            items[index].utf16_end = block.utf16_end;
+        }
+    }
+    items
+}
+
 /// Parse source text into a `Document` with the given mode and options.
 pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions) -> Document {
     let bytes = source.as_bytes();
@@ -74,6 +149,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
     let lines = split_lines(source);
     let mut blocks = Vec::new();
     let mut i = 0;
+    let mut list_contexts = Vec::new();
 
     while i < lines.len() {
         let line = &lines[i];
@@ -123,6 +199,48 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             }
         }
 
+        update_list_context(line.text, &mut list_contexts);
+        if let Some((kind, end_line)) = container_html(
+            &lines,
+            i,
+            source,
+            list_contexts.last().copied(),
+            blocks.last(),
+        ) {
+            let mut block = make_block(kind, &lines, i, end_line, bytes, &utf16_map);
+            let (prefix, _) = quote_prefix(line.text);
+            if let Some(marker) = parse_list_marker(&line.text[prefix..]) {
+                let logical_line = Line {
+                    text: &line.text[prefix..],
+                    byte_start: line.byte_start + prefix,
+                    byte_end: line.byte_end,
+                    virtual_indent: 0,
+                };
+                block.list_marker = Some(marker_to_meta(&marker, &logical_line, bytes, &utf16_map));
+            }
+            blocks.push(block);
+            i = end_line;
+            continue;
+        }
+        if let Some((kind, end_line)) =
+            container_math(&lines, i, bytes, &utf16_map, list_contexts.last().copied())
+        {
+            let mut block = make_block(kind, &lines, i, end_line, bytes, &utf16_map);
+            let (prefix, _) = quote_prefix(line.text);
+            if let Some(marker) = parse_list_marker(&line.text[prefix..]) {
+                let logical_line = Line {
+                    text: &line.text[prefix..],
+                    byte_start: line.byte_start + prefix,
+                    byte_end: line.byte_end,
+                    virtual_indent: 0,
+                };
+                block.list_marker = Some(marker_to_meta(&marker, &logical_line, bytes, &utf16_map));
+            }
+            blocks.push(block);
+            i = end_line;
+            continue;
+        }
+
         // Indented code block (CommonMark §4.4): 4+ leading spaces (or tab).
         // Must come before fenced code so `    ```` is treated as code, not a fence.
         // Cannot interrupt a paragraph — that constraint is naturally enforced
@@ -167,40 +285,90 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             continue;
         }
 
-        // Fenced code block
-        if trimmed.starts_with("```") {
+        if let Some(html) = crate::html::block_start(line.text)
+            .filter(|_| start_after_container(line.text, list_contexts.last().copied()).is_none())
+        {
             let start_line = i;
-            let language = {
-                let after_fence = trimmed[3..].trim();
-                if after_fence.is_empty() {
-                    None
-                } else {
-                    // Take first word only (CommonMark: info string's first word is the language)
-                    Some(
-                        after_fence
-                            .split_whitespace()
-                            .next()
-                            .unwrap_or(after_fence)
-                            .to_string(),
-                    )
+            while i < lines.len() {
+                if matches!(html.end, crate::html::HtmlEnd::Blank)
+                    && lines[i].text.trim_matches([' ', '\t']).is_empty()
+                {
+                    break;
                 }
-            };
+                let closes = html.end.closes(lines[i].text);
+                i += 1;
+                if closes {
+                    break;
+                }
+            }
+            let source = source[lines[start_line].byte_start..lines[i - 1].byte_end].to_owned();
+            blocks.push(make_block(
+                BlockKind::RawHtml { source },
+                &lines,
+                start_line,
+                i,
+                bytes,
+                &utf16_map,
+            ));
+            continue;
+        }
+
+        if let Some((expression, content_start, content_end, end_line)) = dollar_math(&lines, i) {
+            blocks.push(make_block(
+                BlockKind::Math {
+                    expression,
+                    syntax: MathSyntax::Dollars,
+                    quote_depth: 0,
+                    list_context: None,
+                    info_string: None,
+                    content_utf16_start: utf16_map.byte_to_utf16(content_start as u32, bytes),
+                    content_utf16_end: utf16_map.byte_to_utf16(content_end as u32, bytes),
+                },
+                &lines,
+                i,
+                end_line,
+                bytes,
+                &utf16_map,
+            ));
+            i = end_line;
+            continue;
+        }
+
+        if let Some((fence_char, fence_len, info)) = opening_fence(trimmed) {
+            let start_line = i;
+            let language = info.split_whitespace().next().map(str::to_owned);
+            let indent = line.text.len() - line.text.trim_start_matches(' ').len();
             let mut code_lines: Vec<&str> = Vec::new();
             i += 1;
+            let content_start = lines.get(i).map_or(line.byte_end, |line| line.byte_start);
+            let mut content_end = content_start;
             while i < lines.len() {
-                let cl = lines[i].text.trim();
-                if cl.starts_with("```") {
+                let cl = lines[i].text;
+                if closing_fence(cl, fence_char, fence_len) {
                     i += 1;
                     break;
                 }
-                code_lines.push(lines[i].text);
+                let removable = cl.bytes().take(indent).take_while(|b| *b == b' ').count();
+                code_lines.push(&cl[removable..]);
+                content_end = lines[i].byte_start + cl.len();
                 i += 1;
             }
             let code = code_lines.join("\n");
-            // Route ```mermaid fences into a dedicated block kind so Swift
-            // can render the diagram instead of a code tile. Detection is
-            // case-insensitive to tolerate `Mermaid` / `MERMAID`.
-            let kind = if language.as_deref().is_some_and(is_mermaid_info_string) {
+            let kind = if language.as_deref().is_some_and(|language| {
+                ["math", "latex", "tex"]
+                    .iter()
+                    .any(|kind| language.eq_ignore_ascii_case(kind))
+            }) {
+                BlockKind::Math {
+                    expression: code,
+                    syntax: MathSyntax::Fence,
+                    quote_depth: 0,
+                    list_context: None,
+                    info_string: Some(info.to_owned()),
+                    content_utf16_start: utf16_map.byte_to_utf16(content_start as u32, bytes),
+                    content_utf16_end: utf16_map.byte_to_utf16(content_end as u32, bytes),
+                }
+            } else if language.as_deref().is_some_and(is_mermaid_info_string) {
                 BlockKind::MermaidDiagram {
                     diagram_type: MermaidDiagramType::from_source(&code),
                     source: code,
@@ -281,6 +449,20 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             let mut quote_lines: Vec<&str> = Vec::new();
             while i < lines.len() {
                 let ql = lines[i].text.trim();
+                if i > start_line
+                    && (quoted_math_start(lines[i].text).is_some()
+                        || html_interrupts_container(lines[i].text, list_contexts.last().copied())
+                        || (quote_lines
+                            .last()
+                            .is_some_and(|line| line.trim().is_empty())
+                            && html_start_after_container(
+                                lines[i].text,
+                                list_contexts.last().copied(),
+                            )
+                            .is_some()))
+                {
+                    break;
+                }
                 if ql.starts_with("> ") {
                     quote_lines.push(&ql[2..]);
                 } else if ql == ">" {
@@ -288,6 +470,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                 } else {
                     break;
                 }
+                update_list_context(lines[i].text, &mut list_contexts);
                 i += 1;
             }
             // Callout: first line begins with `[!<kind>]` (optionally followed by a title).
@@ -360,6 +543,24 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                     let first_marker = marker.clone();
                     let mut items: Vec<String> = Vec::new();
                     while i < lines.len() {
+                        if i > start_line
+                            && html_interrupts_container(
+                                lines[i].text,
+                                list_contexts.last().copied(),
+                            )
+                        {
+                            break;
+                        }
+                        if i > start_line
+                            && math_start_after_container(
+                                lines[i].text,
+                                list_contexts.last().copied(),
+                            )
+                            .is_some()
+                        {
+                            break;
+                        }
+                        update_list_context(lines[i].text, &mut list_contexts);
                         let Some(ul_marker) = parse_list_marker(lines[i].text) else {
                             let ul = lines[i].text.trim();
                             if ul.is_empty() {
@@ -429,6 +630,24 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                     let first_marker = marker.clone();
                     let mut items: Vec<String> = Vec::new();
                     while i < lines.len() {
+                        if i > start_line
+                            && html_interrupts_container(
+                                lines[i].text,
+                                list_contexts.last().copied(),
+                            )
+                        {
+                            break;
+                        }
+                        if i > start_line
+                            && math_start_after_container(
+                                lines[i].text,
+                                list_contexts.last().copied(),
+                            )
+                            .is_some()
+                        {
+                            break;
+                        }
+                        update_list_context(lines[i].text, &mut list_contexts);
                         let ol = lines[i].text.trim();
                         if let Some(ol_marker) = parse_list_marker(lines[i].text) {
                             if ol_marker.kind == ParsedListKind::Ordered
@@ -501,7 +720,12 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             let pl = lines[i].text;
             let pt = pl.trim();
             if pt.is_empty()
-                || pt.starts_with("```")
+                || html_interrupts_container(pl, list_contexts.last().copied())
+                || crate::html::block_start(pl).is_some_and(|html| html.interrupts_paragraph)
+                || opening_fence(pt).is_some()
+                || (i > start_line && pt.starts_with("$$"))
+                || (i > start_line
+                    && math_start_after_container(pl, list_contexts.last().copied()).is_some())
                 || is_heading_line(pt)
                 || pt.starts_with("> ")
                 || is_horizontal_rule(pt)
@@ -569,11 +793,661 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
 
 // MARK: - Line splitting
 
+fn quote_prefix(text: &str) -> (usize, u32) {
+    quote_prefix_up_to(text, u32::MAX)
+}
+
+fn quote_prefix_up_to(text: &str, limit: u32) -> (usize, u32) {
+    let (offset, depth, _) = quote_prefix_data(text, limit, 0);
+    (offset, depth)
+}
+
+fn quote_prefix_data(text: &str, limit: u32, initial_column: usize) -> (usize, u32, usize) {
+    let mut offset = 0;
+    let mut depth = 0;
+    let mut column = initial_column;
+    let mut padding = 0;
+    while depth < limit {
+        let spaces = text[offset..].bytes().take_while(|b| *b == b' ').count();
+        if padding + spaces > 3 || text.as_bytes().get(offset + spaces) != Some(&b'>') {
+            break;
+        }
+        offset += spaces + 1;
+        column += spaces + 1;
+        padding = 0;
+        match text.as_bytes().get(offset) {
+            Some(b' ') => {
+                offset += 1;
+                column += 1;
+            }
+            Some(b'\t') => {
+                offset += 1;
+                let width = 4 - column % 4;
+                column += width;
+                padding = width - 1;
+            }
+            _ => {}
+        }
+        depth += 1;
+    }
+    (offset, depth, padding)
+}
+
+// Each bounded path step stores an intervening quote depth and list indentation.
+type NestedContainerPath = [(u32, u32); 16];
+
+#[derive(Clone, Copy)]
+struct ListContainer {
+    quote_depth: u32,
+    context: MathListContext,
+    nested: NestedContainerPath,
+}
+
+#[derive(Clone, Copy)]
+struct ContainerStart {
+    offset: usize,
+    quote_depth: u32,
+    inner_quote_depth: u32,
+    list_context: Option<MathListContext>,
+    virtual_indent: usize,
+    nested: NestedContainerPath,
+    has_marker: bool,
+}
+
+fn list_outer_quote_prefix(text: &str, active: Option<ListContainer>) -> (usize, u32) {
+    if let Some(container) = active {
+        let (offset, depth, padding) = quote_prefix_data(text, container.quote_depth, 0);
+        if depth == container.quote_depth
+            && strip_padded_indent(
+                &text[offset..],
+                container.context.content_indent as usize,
+                padding,
+            )
+            .is_some()
+        {
+            return (offset, depth);
+        }
+    }
+    quote_prefix(text)
+}
+
+fn column_width(text: &str) -> usize {
+    text.bytes().fold(0, |column, byte| {
+        if byte == b'\t' {
+            (column / 4 + 1) * 4
+        } else {
+            column + 1
+        }
+    })
+}
+
+fn strip_container_indent(text: &str, required: usize) -> Option<(usize, usize)> {
+    let mut columns = 0;
+    let mut offset = 0;
+    while columns < required {
+        match text.as_bytes().get(offset)? {
+            b' ' => columns += 1,
+            b'\t' => columns = (columns / 4 + 1) * 4,
+            _ => return None,
+        }
+        offset += 1;
+    }
+    Some((offset, columns - required))
+}
+
+fn marker_context(marker: &ParsedListMarker<'_>, text: &str) -> MathListContext {
+    MathListContext {
+        content_indent: column_width(&text[..marker.container_content_start]) as u32,
+        kind: match marker.kind {
+            ParsedListKind::Bullet => 1,
+            ParsedListKind::Ordered => 2,
+            ParsedListKind::Checkbox(false) => 3,
+            ParsedListKind::Checkbox(true) => 4,
+        },
+        number: marker.ordered_number,
+    }
+}
+
+fn strip_padded_indent(text: &str, required: usize, padding: usize) -> Option<(usize, usize)> {
+    let (offset, remainder) = strip_container_indent(text, required.saturating_sub(padding))?;
+    Some((offset, remainder + padding.saturating_sub(required)))
+}
+
+fn update_list_context(text: &str, contexts: &mut Vec<ListContainer>) {
+    let (prefix, quote_depth) = list_outer_quote_prefix(text, contexts.last().copied());
+    let (_, _, padding) = quote_prefix_data(text, quote_depth, 0);
+    let content = &text[prefix..];
+    if content.trim().is_empty() {
+        return;
+    }
+    let indent_bytes = content.len() - content.trim_start_matches([' ', '\t']).len();
+    let indent = column_width(&content[..indent_bytes]) + padding;
+    while contexts.last().is_some_and(|container| {
+        container.quote_depth != quote_depth || indent < container.context.content_indent as usize
+    }) {
+        contexts.pop();
+    }
+    let container_indent = contexts
+        .last()
+        .map_or(0, |container| container.context.content_indent as usize);
+    if indent.saturating_sub(container_indent) > 3 {
+        return;
+    }
+    if let Some(marker) = parse_list_marker(content) {
+        let mut context = marker_context(&marker, content);
+        context.content_indent += padding as u32;
+        contexts.push(ListContainer {
+            quote_depth,
+            context,
+            nested: [(0, 0); 16],
+        });
+    }
+    if let Some(active) = contexts.last_mut() {
+        if let Some(start) = start_after_container(text, Some(*active)) {
+            active.nested = start.nested;
+        }
+    }
+}
+
+fn start_after_container(text: &str, active: Option<ListContainer>) -> Option<ContainerStart> {
+    let (quote_offset, depth) = list_outer_quote_prefix(text, active);
+    let (_, _, quote_padding) = quote_prefix_data(text, depth, 0);
+    let content = &text[quote_offset..];
+    let mut has_marker = false;
+    let (mut offset, list_context, mut virtual_indent, inherited) =
+        if let Some(marker) = parse_list_marker(content) {
+            has_marker = true;
+            let mut context = marker_context(&marker, content);
+            context.content_indent += quote_padding as u32;
+            let indent = column_width(&content[..marker.marker_start]) + quote_padding;
+            let fits_container = indent <= 3
+                || active.is_some_and(|container| {
+                    let parent_indent = container.context.content_indent as usize;
+                    container.quote_depth == depth
+                        && (container.context == context
+                            || (indent >= parent_indent && indent - parent_indent <= 3))
+                });
+            if !fits_container {
+                return None;
+            }
+            (
+                quote_offset + marker.content_start,
+                Some(context),
+                0,
+                [(0, 0); 16],
+            )
+        } else if let Some(container) = active.filter(|container| container.quote_depth == depth) {
+            let (indent, remainder) = strip_padded_indent(
+                content,
+                container.context.content_indent as usize,
+                quote_padding,
+            )?;
+            (
+                quote_offset + indent,
+                Some(container.context),
+                remainder,
+                container.nested,
+            )
+        } else {
+            (quote_offset, None, quote_padding, [(0, 0); 16])
+        };
+    if depth == 0 && list_context.is_none() {
+        return None;
+    }
+    let mut inner_quote_depth = 0;
+    let mut nested = [(0, 0); 16];
+    let mut count = 0;
+    if list_context.is_some() {
+        for step in inherited.into_iter().take_while(|step| step.1 > 0) {
+            let Some((next, padding)) = nested_container_prefix(text, offset, virtual_indent, step)
+            else {
+                break;
+            };
+            offset = next;
+            virtual_indent = padding;
+            nested[count] = step;
+            count += 1;
+        }
+        loop {
+            let (quote_bytes, quotes, padding) =
+                quote_prefix_data(&text[offset..], u32::MAX, column_width(&text[..offset]));
+            let spaces = text[offset..]
+                .bytes()
+                .take_while(|byte| *byte == b' ')
+                .count();
+            if quotes > 0 && virtual_indent + spaces > 3 {
+                break;
+            }
+            let marker_text = &text[offset + quote_bytes..];
+            let marker_padding = if quotes == 0 { virtual_indent } else { padding };
+            if let Some(marker) = parse_list_marker(marker_text).filter(|marker| {
+                column_width(&marker_text[..marker.marker_start]) + marker_padding <= 3
+            }) {
+                if count == nested.len() {
+                    return None;
+                }
+                has_marker = true;
+                nested[count] = (
+                    quotes,
+                    marker_context(&marker, marker_text).content_indent + marker_padding as u32,
+                );
+                count += 1;
+                offset += quote_bytes + marker.content_start;
+                virtual_indent = 0;
+                continue;
+            }
+            if quotes > 0 {
+                offset += quote_bytes;
+                inner_quote_depth = quotes;
+                virtual_indent = padding;
+            }
+            break;
+        }
+    }
+    let content = text[offset..].trim_start_matches(' ');
+    if virtual_indent + text[offset..].len() - content.len() > 3 {
+        return None;
+    }
+    Some(ContainerStart {
+        offset,
+        quote_depth: depth + inner_quote_depth + nested.iter().map(|step| step.0).sum::<u32>(),
+        inner_quote_depth,
+        list_context,
+        virtual_indent,
+        nested,
+        has_marker,
+    })
+}
+
+fn nested_container_prefix(
+    text: &str,
+    offset: usize,
+    virtual_indent: usize,
+    step: (u32, u32),
+) -> Option<(usize, usize)> {
+    let spaces = text[offset..]
+        .bytes()
+        .take_while(|byte| *byte == b' ')
+        .count();
+    let (prefix, depth, padding) =
+        quote_prefix_data(&text[offset..], step.0, column_width(&text[..offset]));
+    if depth != step.0 || (depth > 0 && virtual_indent + spaces > 3) {
+        return None;
+    }
+    let offset = offset + prefix;
+    let padding = if depth == 0 { virtual_indent } else { padding };
+    let required = (step.1 as usize).saturating_sub(padding);
+    let (indent, remaining) = strip_container_indent(&text[offset..], required).or_else(|| {
+        text[offset..]
+            .trim()
+            .is_empty()
+            .then_some((text.len() - offset, 0))
+    })?;
+    Some((
+        offset + indent,
+        remaining + padding.saturating_sub(step.1 as usize),
+    ))
+}
+
+fn math_start_after_container(text: &str, active: Option<ListContainer>) -> Option<ContainerStart> {
+    let start = start_after_container(text, active)?;
+    let content = text[start.offset..].trim_start_matches(' ');
+    let is_math_fence = opening_fence(content).is_some_and(|(_, _, info)| {
+        info.split_whitespace().next().is_some_and(|word| {
+            ["math", "latex", "tex"]
+                .iter()
+                .any(|language| word.eq_ignore_ascii_case(language))
+        })
+    });
+    (content.starts_with("$$") || is_math_fence).then_some(start)
+}
+
+fn html_start_after_container(
+    text: &str,
+    active: Option<ListContainer>,
+) -> Option<(ContainerStart, crate::html::HtmlStart)> {
+    if !text.contains('<') {
+        return None;
+    }
+    let start = start_after_container(text, active)?;
+    let html = crate::html::block_start(&text[start.offset..])?;
+    Some((start, html))
+}
+
+fn html_interrupts_container(text: &str, active: Option<ListContainer>) -> bool {
+    html_start_after_container(text, active)
+        .is_some_and(|(start, html)| html.interrupts_paragraph || start.has_marker)
+}
+
+pub(crate) fn may_start_html(text: &str) -> bool {
+    crate::html::block_start(text).is_some() || html_start_after_container(text, None).is_some()
+}
+
+fn container_line<'a>(line: &Line<'a>, first: bool, start: ContainerStart) -> Option<Line<'a>> {
+    let outer_depth = start.quote_depth
+        - start.inner_quote_depth
+        - start.nested.iter().map(|step| step.0).sum::<u32>();
+    let (mut prefix, line_depth, quote_padding) = quote_prefix_data(line.text, outer_depth, 0);
+    if line_depth != outer_depth {
+        return None;
+    }
+    let mut virtual_indent = quote_padding;
+    if first {
+        prefix = start.offset;
+        virtual_indent = start.virtual_indent;
+    } else if let Some(context) = start.list_context {
+        let (indent, remainder) = strip_padded_indent(
+            &line.text[prefix..],
+            context.content_indent as usize,
+            quote_padding,
+        )
+        .or_else(|| {
+            line.text[prefix..]
+                .trim()
+                .is_empty()
+                .then_some((line.text.len() - prefix, 0))
+        })?;
+        prefix += indent;
+        virtual_indent = remainder;
+    }
+    if !first {
+        for step in start.nested.into_iter().take_while(|step| step.1 > 0) {
+            (prefix, virtual_indent) =
+                nested_container_prefix(line.text, prefix, virtual_indent, step)?;
+        }
+    }
+    if !first && start.inner_quote_depth > 0 {
+        let spaces = line.text[prefix..]
+            .bytes()
+            .take_while(|byte| *byte == b' ')
+            .count();
+        let (quote_bytes, quotes, padding) = quote_prefix_data(
+            &line.text[prefix..],
+            start.inner_quote_depth,
+            column_width(&line.text[..prefix]),
+        );
+        if quotes != start.inner_quote_depth || virtual_indent + spaces > 3 {
+            return None;
+        }
+        prefix += quote_bytes;
+        virtual_indent = padding;
+    }
+    Some(Line {
+        text: &line.text[prefix..],
+        byte_start: line.byte_start + prefix,
+        byte_end: line.byte_end,
+        virtual_indent,
+    })
+}
+
+fn container_html(
+    lines: &[Line<'_>],
+    start: usize,
+    source: &str,
+    active: Option<ListContainer>,
+    previous: Option<&BlockNode>,
+) -> Option<(BlockKind, usize)> {
+    let (container, html) = html_start_after_container(lines[start].text, active)?;
+    let new_item = container.has_marker;
+    if !html.interrupts_paragraph && !new_item && start > 0 {
+        let paragraph_open = previous.is_some_and(|block| {
+            block.line_end == start as u32
+                && matches!(
+                    block.kind,
+                    BlockKind::Paragraph { .. }
+                        | BlockKind::BulletItem { .. }
+                        | BlockKind::NumberedItem { .. }
+                        | BlockKind::Checkbox { .. }
+                        | BlockKind::Blockquote { .. }
+                        | BlockKind::Callout { .. }
+                        | BlockKind::BulletList { .. }
+                        | BlockKind::OrderedList { .. }
+                )
+        });
+        let preceding_content = container_line(&lines[start - 1], false, container).or_else(|| {
+            let preceding = start_after_container(lines[start - 1].text, active)?;
+            (preceding.list_context == container.list_context
+                && preceding.quote_depth == container.quote_depth
+                && preceding.nested == container.nested)
+                .then(|| container_line(&lines[start - 1], true, preceding))
+                .flatten()
+        });
+        if paragraph_open && preceding_content.is_some_and(|line| !line.text.trim().is_empty()) {
+            return None;
+        }
+    }
+    let mut end = start;
+    while let Some(line) = lines
+        .get(end)
+        .and_then(|line| container_line(line, end == start, container))
+    {
+        if matches!(html.end, crate::html::HtmlEnd::Blank)
+            && line.text.trim_matches([' ', '\t']).is_empty()
+        {
+            break;
+        }
+        end += 1;
+        if html.end.closes(line.text) {
+            break;
+        }
+    }
+    if end == start {
+        return None;
+    }
+    let source = source[lines[start].byte_start..lines[end - 1].byte_end].to_owned();
+    Some((BlockKind::RawHtml { source }, end))
+}
+
+fn quoted_math_start(text: &str) -> Option<(usize, u32)> {
+    math_start_after_container(text, None)
+        .filter(|start| start.quote_depth > 0)
+        .map(|start| (start.offset, start.quote_depth))
+}
+
+pub(crate) fn may_start_math(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.starts_with("$$")
+        || math_start_after_container(text, None).is_some()
+        || opening_fence(trimmed).is_some_and(|(_, _, info)| {
+            info.split_whitespace().next().is_some_and(|word| {
+                ["math", "latex", "tex"]
+                    .iter()
+                    .any(|language| word.eq_ignore_ascii_case(language))
+            })
+        })
+}
+
+fn container_math(
+    lines: &[Line<'_>],
+    start: usize,
+    source: &[u8],
+    map: &Utf16Map,
+    active: Option<ListContainer>,
+) -> Option<(BlockKind, usize)> {
+    let container = math_start_after_container(lines[start].text, active)?;
+    let ContainerStart {
+        offset,
+        quote_depth: depth,
+        list_context,
+        virtual_indent: opening_indent,
+        ..
+    } = container;
+    let first = &lines[start].text[offset..];
+    let fence = opening_fence(first.trim());
+    let mut logical = Vec::new();
+    for (index, line) in lines.iter().enumerate().skip(start) {
+        let Some(line) = container_line(line, index == start, container) else {
+            break;
+        };
+        let content = line.text;
+        logical.push(line);
+        if index == start && fence.is_none() && first.trim() != "$$" {
+            break;
+        }
+        if index > start {
+            let closes = match fence {
+                Some((marker, length, _)) => {
+                    closing_fence(&logical.last()?.math_text(), marker, length)
+                }
+                None => content.trim() == "$$" || content.trim().is_empty(),
+            };
+            if closes {
+                break;
+            }
+        }
+    }
+    let (expression, content_start, content_end, consumed, syntax, info_string) =
+        if let Some((marker, length, info)) = fence {
+            let closed =
+                logical.len() > 1 && closing_fence(&logical.last()?.math_text(), marker, length);
+            let end = logical.len() - usize::from(closed);
+            let content = &logical[1..end];
+            let indent = opening_indent + first.len() - first.trim_start_matches(' ').len();
+            let expression = content
+                .iter()
+                .map(|line| {
+                    let text = line.math_text();
+                    let removable = text.bytes().take(indent).take_while(|b| *b == b' ').count();
+                    match text {
+                        std::borrow::Cow::Borrowed(text) => {
+                            std::borrow::Cow::Borrowed(&text[removable..])
+                        }
+                        std::borrow::Cow::Owned(mut text) => {
+                            text.drain(..removable);
+                            std::borrow::Cow::Owned(text)
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let content_start = content
+                .first()
+                .map_or(lines[start].byte_end, |line| line.byte_start);
+            let content_end = content
+                .last()
+                .map_or(content_start, |line| line.byte_start + line.text.len());
+            (
+                expression,
+                content_start,
+                content_end,
+                logical.len(),
+                MathSyntax::Fence,
+                Some(info.to_owned()),
+            )
+        } else {
+            let (expression, content_start, content_end, consumed) = dollar_math(&logical, 0)?;
+            (
+                expression,
+                content_start,
+                content_end,
+                consumed,
+                MathSyntax::Dollars,
+                None,
+            )
+        };
+    Some((
+        BlockKind::Math {
+            expression,
+            syntax,
+            quote_depth: depth,
+            list_context,
+            info_string,
+            content_utf16_start: map.byte_to_utf16(content_start as u32, source),
+            content_utf16_end: map.byte_to_utf16(content_end as u32, source),
+        },
+        start + consumed,
+    ))
+}
+
+fn opening_fence(text: &str) -> Option<(u8, usize, &str)> {
+    let marker = *text.as_bytes().first()?;
+    if !matches!(marker, b'`' | b'~') {
+        return None;
+    }
+    let length = text.bytes().take_while(|b| *b == marker).count();
+    if length < 3 {
+        return None;
+    }
+    let info = text[length..].trim();
+    if marker == b'`' && info.contains('`') {
+        return None;
+    }
+    Some((marker, length, info))
+}
+
+fn closing_fence(text: &str, marker: u8, minimum: usize) -> bool {
+    let trimmed = text.trim_start_matches(' ');
+    if text.len() - trimmed.len() > 3 {
+        return false;
+    }
+    let length = trimmed.bytes().take_while(|b| *b == marker).count();
+    length >= minimum && trimmed[length..].bytes().all(|b| matches!(b, b' ' | b'\t'))
+}
+
+fn dollar_math(lines: &[Line<'_>], start: usize) -> Option<(String, usize, usize, usize)> {
+    let line = &lines[start];
+    let text = line.text.trim_start_matches(' ');
+    let indent = line.text.len() - text.len();
+    if line.virtual_indent + indent > 3 || !text.starts_with("$$") || text.starts_with("$$$") {
+        return None;
+    }
+    let trimmed = text.trim_end();
+    if trimmed.len() > 4 && trimmed.ends_with("$$") && !trimmed.ends_with("$$$") {
+        let expression = &trimmed[2..trimmed.len() - 2];
+        if expression.trim().is_empty() || expression.contains("$$") {
+            return None;
+        }
+        let content_start = line.byte_start + indent + 2;
+        return Some((
+            expression.into(),
+            content_start,
+            content_start + expression.len(),
+            start + 1,
+        ));
+    }
+    if trimmed != "$$" {
+        return None;
+    }
+    let mut expression = Vec::new();
+    let content_start = lines.get(start + 1)?.byte_start;
+    let mut content_end = content_start;
+    for (index, line) in lines.iter().enumerate().skip(start + 1) {
+        if line.text.trim().is_empty() {
+            return None;
+        }
+        if line.text.trim() == "$$" {
+            let indent = line.text.len() - line.text.trim_start_matches(' ').len();
+            if expression.is_empty()
+                || line.virtual_indent + indent > 3
+                || line.text.starts_with('\t')
+            {
+                return None;
+            }
+            return Some((expression.join("\n"), content_start, content_end, index + 1));
+        }
+        expression.push(line.math_text());
+        content_end = line.byte_start + line.text.len();
+    }
+    None
+}
+
 /// A line with its byte range in the source.
 struct Line<'a> {
     text: &'a str,
     byte_start: usize,
     byte_end: usize, // exclusive, includes the newline if present
+    // Columns left by a tab that straddles a container boundary, not source bytes.
+    virtual_indent: usize,
+}
+
+impl Line<'_> {
+    fn math_text(&self) -> std::borrow::Cow<'_, str> {
+        if self.virtual_indent == 0 {
+            self.text.into()
+        } else {
+            format!("{}{}", " ".repeat(self.virtual_indent), self.text).into()
+        }
+    }
 }
 
 fn split_lines(source: &str) -> Vec<Line<'_>> {
@@ -593,6 +1467,7 @@ fn split_lines(source: &str) -> Vec<Line<'_>> {
                 text: &source[start..text_end],
                 byte_start: start,
                 byte_end: i + 1,
+                virtual_indent: 0,
             });
             start = i + 1;
         }
@@ -608,6 +1483,7 @@ fn split_lines(source: &str) -> Vec<Line<'_>> {
             text: &source[start..end],
             byte_start: start,
             byte_end: source.len(),
+            virtual_indent: 0,
         });
     }
 
@@ -675,6 +1551,7 @@ fn make_block_with_optional_marker(
         byte_end,
         list_marker,
         inline_spans: Vec::new(),
+        table_cells: Vec::new(),
     }
 }
 
@@ -925,6 +1802,7 @@ fn parse_list_marker(line: &str) -> Option<ParsedListMarker<'_>> {
                 marker_start,
                 marker_end: checkbox_end,
                 content_start: checkbox_end,
+                container_content_start: bullet_marker_end,
                 marker_source,
                 unordered_marker: Some(marker_byte as char),
                 ordered_delimiter: None,
@@ -940,6 +1818,7 @@ fn parse_list_marker(line: &str) -> Option<ParsedListMarker<'_>> {
             marker_start,
             marker_end: bullet_marker_end,
             content_start: bullet_marker_end,
+            container_content_start: bullet_marker_end,
             marker_source,
             unordered_marker: Some(marker_byte as char),
             ordered_delimiter: None,
@@ -984,6 +1863,7 @@ fn parse_list_marker(line: &str) -> Option<ParsedListMarker<'_>> {
             marker_start,
             marker_end,
             content_start: marker_end,
+            container_content_start: marker_end,
             marker_source,
             unordered_marker: None,
             ordered_delimiter: Some(delimiter as char),
@@ -1118,14 +1998,37 @@ fn is_table_separator(line: &str) -> bool {
 }
 
 fn parse_table_row(line: &str) -> Vec<String> {
-    let mut cells: Vec<String> = line.split('|').map(|s| s.trim().to_string()).collect();
-    if cells.first().is_some_and(|s| s.is_empty()) {
-        cells.remove(0);
+    table_cell_ranges(line)
+        .into_iter()
+        .map(|range| line[range].to_owned())
+        .collect()
+}
+
+pub(crate) fn table_cell_ranges(line: &str) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut backslashes = 0;
+    for (index, byte) in line.bytes().enumerate() {
+        if byte == b'|' && backslashes % 2 == 0 {
+            ranges.push(start..index);
+            start = index + 1;
+        }
+        backslashes = if byte == b'\\' { backslashes + 1 } else { 0 };
     }
-    if cells.last().is_some_and(|s| s.is_empty()) {
-        cells.pop();
+    ranges.push(start..line.len());
+    for range in &mut ranges {
+        let cell = &line[range.clone()];
+        let leading = cell.len() - cell.trim_start().len();
+        range.start += leading;
+        range.end = range.start + cell.trim().len();
     }
-    cells
+    if ranges.first().is_some_and(std::ops::Range::is_empty) {
+        ranges.remove(0);
+    }
+    if ranges.last().is_some_and(std::ops::Range::is_empty) {
+        ranges.pop();
+    }
+    ranges
 }
 
 fn parse_alignments(separator: &str) -> Vec<ColumnAlignment> {
@@ -1159,12 +2062,27 @@ fn parse_alignments(separator: &str) -> Vec<ColumnAlignment> {
 
 /// Extract wiki link titles from content (skipping code blocks).
 pub fn extract_wiki_links(content: &str) -> Vec<String> {
-    let without_code = strip_code_blocks(content);
-    parse_inline_segments(&without_code)
-        .into_iter()
-        .filter_map(|seg| match seg {
-            InlineSegment::WikiLink(title) => Some(title),
-            _ => None,
+    let doc = parse(content, ParseMode::Editable);
+    let utf16: Vec<_> = content.encode_utf16().collect();
+    doc.blocks
+        .iter()
+        .flat_map(|block| {
+            block.inline_spans.iter().chain(
+                block
+                    .table_cells
+                    .iter()
+                    .flat_map(|cell| cell.inline_spans.iter()),
+            )
+        })
+        .filter_map(|span| {
+            if !matches!(span.kind, InlineKind::WikiLink) {
+                return None;
+            }
+            let body = String::from_utf16_lossy(
+                &utf16[span.utf16_start as usize + 2..span.utf16_end as usize - 2],
+            );
+            let title = body.split('|').next().unwrap_or("").trim();
+            (!title.is_empty()).then(|| title.to_owned())
         })
         .collect()
 }
@@ -1211,76 +2129,6 @@ pub fn toggle_checkbox(content: &str, line_index: u32) -> String {
     let mut result: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
     result[idx] = new_line;
     result.join("\n")
-}
-
-// MARK: - Inline segments (for wiki link extraction)
-
-enum InlineSegment {
-    #[allow(dead_code)]
-    Text(String),
-    WikiLink(String),
-}
-
-fn parse_inline_segments(text: &str) -> Vec<InlineSegment> {
-    let mut segments = Vec::new();
-    let mut remaining = text;
-
-    while let Some(open_pos) = remaining.find("[[") {
-        let before = &remaining[..open_pos];
-        if !before.is_empty() {
-            segments.push(InlineSegment::Text(before.to_string()));
-        }
-        let after_open = &remaining[open_pos + 2..];
-        if let Some(close_pos) = after_open.find("]]") {
-            let body = &after_open[..close_pos];
-            // Aliased form `[[target|Display]]` — the target for backlinks is
-            // the pre-pipe portion; the display text is rendered inline only.
-            let target = body.split('|').next().unwrap_or(body).trim().to_string();
-            if !target.is_empty() {
-                segments.push(InlineSegment::WikiLink(target));
-            } else {
-                segments.push(InlineSegment::Text("[[]]".to_string()));
-            }
-            remaining = &after_open[close_pos + 2..];
-        } else {
-            segments.push(InlineSegment::Text(remaining[open_pos..].to_string()));
-            remaining = "";
-        }
-    }
-
-    if !remaining.is_empty() {
-        segments.push(InlineSegment::Text(remaining.to_string()));
-    }
-
-    segments
-}
-
-fn strip_code_blocks(text: &str) -> String {
-    let mut result = String::new();
-    let mut in_code_block = false;
-
-    for line in text.lines() {
-        if line.trim().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if !in_code_block {
-            // Strip inline code spans
-            let mut cleaned = String::new();
-            let mut in_inline_code = false;
-            for ch in line.chars() {
-                if ch == '`' {
-                    in_inline_code = !in_inline_code;
-                } else if !in_inline_code {
-                    cleaned.push(ch);
-                }
-            }
-            result.push_str(&cleaned);
-            result.push('\n');
-        }
-    }
-
-    result
 }
 
 #[cfg(test)]
