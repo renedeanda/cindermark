@@ -1,6 +1,44 @@
 use cindermark::{CindermarkParser, FfiBlockType};
 
 #[test]
+fn tab_indentation_preserves_columns_beyond_the_list_prefix() {
+    for (source, expected) in [
+        ("- $$\n\tx\n  $$", "  x"),
+        ("- ~~~math\n\tx\n  ~~~", "  x"),
+        ("- item\n    ~~~math\n\tx\n    ~~~", "x"),
+        ("1. $$\n\tα\n   $$", " α"),
+        ("- item\n\t~~~math\n\tx\n\t~~~", "x"),
+        ("- item\n\t$$\n\tα\n\t$$", "  α"),
+        ("- $$\r\n\t🍃\r\n  $$", "  🍃"),
+    ] {
+        let parsed = CindermarkParser::new(None).parse_editable(source.into());
+        let math = parsed
+            .blocks
+            .iter()
+            .find(|block| matches!(block.block_type, FfiBlockType::Math { .. }))
+            .expect(source);
+        assert!(
+            matches!(math.block_type, FfiBlockType::Math { .. }),
+            "{source}"
+        );
+        assert_eq!(math.text, expected, "{source}");
+        let FfiBlockType::Math {
+            content_utf16_start,
+            content_utf16_end,
+            ..
+        } = math.block_type
+        else {
+            unreachable!()
+        };
+        let utf16: Vec<_> = source.encode_utf16().collect();
+        let content =
+            String::from_utf16(&utf16[content_utf16_start as usize..content_utf16_end as usize])
+                .unwrap();
+        assert_eq!(content.trim(), expected.trim(), "{source}");
+    }
+}
+
+#[test]
 fn indented_code_cannot_introduce_math_list_containers() {
     for source in [
         "    - $$x$$",
@@ -133,6 +171,8 @@ fn list_math_incremental_edits_match_full_parse() {
         "- parent\n\n  paragraph\n\n  $$x$$\n\nnext",
         "- [x] ~~~math\n  α\n  ~~~\nlast",
         "> - item\n>   $$x$$\nend",
+        "- item\n\t$$\n\tα\n\t$$\nend",
+        "- item\n\t~~~math\n\tx\n\t~~~\nend",
     ] {
         for offset in source.char_indices().map(|(index, _)| index) {
             let parser = CindermarkParser::new(None);

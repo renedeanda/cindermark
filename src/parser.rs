@@ -136,6 +136,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                     text: &line.text[prefix..],
                     byte_start: line.byte_start + prefix,
                     byte_end: line.byte_end,
+                    virtual_indent: 0,
                 };
                 block.list_marker = Some(marker_to_meta(&marker, &logical_line, bytes, &utf16_map));
             }
@@ -672,7 +673,7 @@ fn column_width(text: &str) -> usize {
     })
 }
 
-fn strip_container_indent(text: &str, required: usize) -> Option<usize> {
+fn strip_container_indent(text: &str, required: usize) -> Option<(usize, usize)> {
     let mut columns = 0;
     let mut offset = 0;
     while columns < required {
@@ -683,7 +684,7 @@ fn strip_container_indent(text: &str, required: usize) -> Option<usize> {
         }
         offset += 1;
     }
-    Some(offset)
+    Some((offset, columns - required))
 }
 
 fn marker_context(marker: &ParsedListMarker<'_>, text: &str) -> MathListContext {
@@ -729,10 +730,10 @@ fn update_list_context(text: &str, contexts: &mut Vec<ListContainer>) {
 fn math_start_after_container(
     text: &str,
     active: Option<ListContainer>,
-) -> Option<(usize, u32, Option<MathListContext>)> {
+) -> Option<(usize, u32, Option<MathListContext>, usize)> {
     let (quote_offset, depth) = quote_prefix(text);
     let content = &text[quote_offset..];
-    let (offset, list_context) = if let Some(marker) = parse_list_marker(content) {
+    let (offset, list_context, virtual_indent) = if let Some(marker) = parse_list_marker(content) {
         let context = marker_context(&marker, content);
         let indent = column_width(&content[..marker.marker_start]);
         let fits_container = indent <= 3
@@ -745,21 +746,19 @@ fn math_start_after_container(
         if !fits_container {
             return None;
         }
-        (quote_offset + marker.content_start, Some(context))
+        (quote_offset + marker.content_start, Some(context), 0)
     } else if let Some(container) = active.filter(|container| container.quote_depth == depth) {
-        (
-            quote_offset
-                + strip_container_indent(content, container.context.content_indent as usize)?,
-            Some(container.context),
-        )
+        let (indent, remainder) =
+            strip_container_indent(content, container.context.content_indent as usize)?;
+        (quote_offset + indent, Some(container.context), remainder)
     } else {
-        (quote_offset, None)
+        (quote_offset, None, 0)
     };
     if depth == 0 && list_context.is_none() {
         return None;
     }
     let content = text[offset..].trim_start_matches(' ');
-    if text[offset..].len() - content.len() > 3 {
+    if virtual_indent + text[offset..].len() - content.len() > 3 {
         return None;
     }
     let is_math_fence = opening_fence(content).is_some_and(|(_, _, info)| {
@@ -769,13 +768,18 @@ fn math_start_after_container(
                 .any(|language| word.eq_ignore_ascii_case(language))
         })
     });
-    (content.starts_with("$$") || is_math_fence).then_some((offset, depth, list_context))
+    (content.starts_with("$$") || is_math_fence).then_some((
+        offset,
+        depth,
+        list_context,
+        virtual_indent,
+    ))
 }
 
 fn quoted_math_start(text: &str) -> Option<(usize, u32)> {
     math_start_after_container(text, None)
-        .filter(|(_, depth, _)| *depth > 0)
-        .map(|(offset, depth, _)| (offset, depth))
+        .filter(|(_, depth, _, _)| *depth > 0)
+        .map(|(offset, depth, _, _)| (offset, depth))
 }
 
 pub(crate) fn may_start_math(text: &str) -> bool {
@@ -798,43 +802,50 @@ fn container_math(
     map: &Utf16Map,
     active: Option<ListContainer>,
 ) -> Option<(BlockKind, usize)> {
-    let (offset, depth, list_context) = math_start_after_container(lines[start].text, active)?;
+    let (offset, depth, list_context, opening_indent) =
+        math_start_after_container(lines[start].text, active)?;
     let first = &lines[start].text[offset..];
     let fence = opening_fence(first.trim());
     let mut logical = Vec::new();
     for (index, line) in lines.iter().enumerate().skip(start) {
+        let mut virtual_indent = 0;
         let (mut prefix, line_depth) = quote_prefix(line.text);
         if line_depth != depth {
             break;
         }
         if index == start {
             prefix = offset;
+            virtual_indent = opening_indent;
         } else if let Some(context) = list_context {
-            let Some(indent) =
+            let Some((indent, remainder)) =
                 strip_container_indent(&line.text[prefix..], context.content_indent as usize)
                     .or_else(|| {
                         line.text[prefix..]
                             .trim()
                             .is_empty()
-                            .then_some(line.text.len() - prefix)
+                            .then_some((line.text.len() - prefix, 0))
                     })
             else {
                 break;
             };
             prefix += indent;
+            virtual_indent = remainder;
         }
         let content = &line.text[prefix..];
         logical.push(Line {
             text: content,
             byte_start: line.byte_start + prefix,
             byte_end: line.byte_end,
+            virtual_indent,
         });
         if index == start && fence.is_none() && first.trim() != "$$" {
             break;
         }
         if index > start {
             let closes = match fence {
-                Some((marker, length, _)) => closing_fence(content, marker, length),
+                Some((marker, length, _)) => {
+                    closing_fence(&logical.last()?.math_text(), marker, length)
+                }
                 None => content.trim() == "$$" || content.trim().is_empty(),
             };
             if closes {
@@ -844,20 +855,25 @@ fn container_math(
     }
     let (expression, content_start, content_end, consumed, syntax, info_string) =
         if let Some((marker, length, info)) = fence {
-            let closed = logical.len() > 1 && closing_fence(logical.last()?.text, marker, length);
+            let closed =
+                logical.len() > 1 && closing_fence(&logical.last()?.math_text(), marker, length);
             let end = logical.len() - usize::from(closed);
             let content = &logical[1..end];
-            let indent = first.len() - first.trim_start_matches(' ').len();
+            let indent = opening_indent + first.len() - first.trim_start_matches(' ').len();
             let expression = content
                 .iter()
                 .map(|line| {
-                    let removable = line
-                        .text
-                        .bytes()
-                        .take(indent)
-                        .take_while(|b| *b == b' ')
-                        .count();
-                    &line.text[removable..]
+                    let text = line.math_text();
+                    let removable = text.bytes().take(indent).take_while(|b| *b == b' ').count();
+                    match text {
+                        std::borrow::Cow::Borrowed(text) => {
+                            std::borrow::Cow::Borrowed(&text[removable..])
+                        }
+                        std::borrow::Cow::Owned(mut text) => {
+                            text.drain(..removable);
+                            std::borrow::Cow::Owned(text)
+                        }
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -929,7 +945,7 @@ fn dollar_math(lines: &[Line<'_>], start: usize) -> Option<(String, usize, usize
     let line = &lines[start];
     let text = line.text.trim_start_matches(' ');
     let indent = line.text.len() - text.len();
-    if indent > 3 || !text.starts_with("$$") || text.starts_with("$$$") {
+    if line.virtual_indent + indent > 3 || !text.starts_with("$$") || text.starts_with("$$$") {
         return None;
     }
     let trimmed = text.trim_end();
@@ -958,12 +974,15 @@ fn dollar_math(lines: &[Line<'_>], start: usize) -> Option<(String, usize, usize
         }
         if line.text.trim() == "$$" {
             let indent = line.text.len() - line.text.trim_start_matches(' ').len();
-            if expression.is_empty() || indent > 3 || line.text.starts_with('\t') {
+            if expression.is_empty()
+                || line.virtual_indent + indent > 3
+                || line.text.starts_with('\t')
+            {
                 return None;
             }
             return Some((expression.join("\n"), content_start, content_end, index + 1));
         }
-        expression.push(line.text);
+        expression.push(line.math_text());
         content_end = line.byte_start + line.text.len();
     }
     None
@@ -974,6 +993,18 @@ struct Line<'a> {
     text: &'a str,
     byte_start: usize,
     byte_end: usize, // exclusive, includes the newline if present
+    // Columns left by a tab that straddles a container boundary, not source bytes.
+    virtual_indent: usize,
+}
+
+impl Line<'_> {
+    fn math_text(&self) -> std::borrow::Cow<'_, str> {
+        if self.virtual_indent == 0 {
+            self.text.into()
+        } else {
+            format!("{}{}", " ".repeat(self.virtual_indent), self.text).into()
+        }
+    }
 }
 
 fn split_lines(source: &str) -> Vec<Line<'_>> {
@@ -993,6 +1024,7 @@ fn split_lines(source: &str) -> Vec<Line<'_>> {
                 text: &source[start..text_end],
                 byte_start: start,
                 byte_end: i + 1,
+                virtual_indent: 0,
             });
             start = i + 1;
         }
@@ -1008,6 +1040,7 @@ fn split_lines(source: &str) -> Vec<Line<'_>> {
             text: &source[start..end],
             byte_start: start,
             byte_end: source.len(),
+            virtual_indent: 0,
         });
     }
 

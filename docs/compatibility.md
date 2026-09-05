@@ -24,6 +24,8 @@ number and checked fields retain the containing item's identity. A marker on
 the math opening line retains its exact marker metadata; a continuation does
 not invent a duplicate marker. Task continuation indentation belongs to the
 bullet marker, not the visual width of `[ ]`.
+When a tab crosses a list indentation boundary, remaining columns become spaces
+in the derived math expression; source ranges still address the original tab.
 
 Table cells retain the existing header/row strings and additionally expose
 inline spans and source ranges. Row zero is the header; row one is the first
