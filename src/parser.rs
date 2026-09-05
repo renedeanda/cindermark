@@ -641,9 +641,13 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
 // MARK: - Line splitting
 
 fn quote_prefix(text: &str) -> (usize, u32) {
+    quote_prefix_up_to(text, u32::MAX)
+}
+
+fn quote_prefix_up_to(text: &str, limit: u32) -> (usize, u32) {
     let mut offset = 0;
     let mut depth = 0;
-    loop {
+    while depth < limit {
         let spaces = text[offset..].bytes().take_while(|b| *b == b' ').count();
         if spaces > 3 || text.as_bytes().get(offset + spaces) != Some(&b'>') {
             break;
@@ -661,6 +665,27 @@ fn quote_prefix(text: &str) -> (usize, u32) {
 struct ListContainer {
     quote_depth: u32,
     context: MathListContext,
+}
+
+struct MathStart {
+    offset: usize,
+    quote_depth: u32,
+    inner_quote_depth: u32,
+    list_context: Option<MathListContext>,
+    virtual_indent: usize,
+}
+
+fn list_outer_quote_prefix(text: &str, active: Option<ListContainer>) -> (usize, u32) {
+    if let Some(container) = active {
+        let (offset, depth) = quote_prefix_up_to(text, container.quote_depth);
+        if depth == container.quote_depth
+            && strip_container_indent(&text[offset..], container.context.content_indent as usize)
+                .is_some()
+        {
+            return (offset, depth);
+        }
+    }
+    quote_prefix(text)
 }
 
 fn column_width(text: &str) -> usize {
@@ -701,7 +726,7 @@ fn marker_context(marker: &ParsedListMarker<'_>, text: &str) -> MathListContext 
 }
 
 fn update_list_context(text: &str, contexts: &mut Vec<ListContainer>) {
-    let (prefix, quote_depth) = quote_prefix(text);
+    let (prefix, quote_depth) = list_outer_quote_prefix(text, contexts.last().copied());
     let content = &text[prefix..];
     if content.trim().is_empty() {
         return;
@@ -727,35 +752,46 @@ fn update_list_context(text: &str, contexts: &mut Vec<ListContainer>) {
     }
 }
 
-fn math_start_after_container(
-    text: &str,
-    active: Option<ListContainer>,
-) -> Option<(usize, u32, Option<MathListContext>, usize)> {
-    let (quote_offset, depth) = quote_prefix(text);
+fn math_start_after_container(text: &str, active: Option<ListContainer>) -> Option<MathStart> {
+    let (quote_offset, depth) = list_outer_quote_prefix(text, active);
     let content = &text[quote_offset..];
-    let (offset, list_context, virtual_indent) = if let Some(marker) = parse_list_marker(content) {
-        let context = marker_context(&marker, content);
-        let indent = column_width(&content[..marker.marker_start]);
-        let fits_container = indent <= 3
-            || active.is_some_and(|container| {
-                let parent_indent = container.context.content_indent as usize;
-                container.quote_depth == depth
-                    && (container.context == context
-                        || (indent >= parent_indent && indent - parent_indent <= 3))
-            });
-        if !fits_container {
-            return None;
-        }
-        (quote_offset + marker.content_start, Some(context), 0)
-    } else if let Some(container) = active.filter(|container| container.quote_depth == depth) {
-        let (indent, remainder) =
-            strip_container_indent(content, container.context.content_indent as usize)?;
-        (quote_offset + indent, Some(container.context), remainder)
-    } else {
-        (quote_offset, None, 0)
-    };
+    let (mut offset, list_context, mut virtual_indent) =
+        if let Some(marker) = parse_list_marker(content) {
+            let context = marker_context(&marker, content);
+            let indent = column_width(&content[..marker.marker_start]);
+            let fits_container = indent <= 3
+                || active.is_some_and(|container| {
+                    let parent_indent = container.context.content_indent as usize;
+                    container.quote_depth == depth
+                        && (container.context == context
+                            || (indent >= parent_indent && indent - parent_indent <= 3))
+                });
+            if !fits_container {
+                return None;
+            }
+            (quote_offset + marker.content_start, Some(context), 0)
+        } else if let Some(container) = active.filter(|container| container.quote_depth == depth) {
+            let (indent, remainder) =
+                strip_container_indent(content, container.context.content_indent as usize)?;
+            (quote_offset + indent, Some(container.context), remainder)
+        } else {
+            (quote_offset, None, 0)
+        };
     if depth == 0 && list_context.is_none() {
         return None;
+    }
+    let mut inner_quote_depth = 0;
+    if list_context.is_some() {
+        let (quote_bytes, quotes) = quote_prefix(&text[offset..]);
+        let spaces = text[offset..]
+            .bytes()
+            .take_while(|byte| *byte == b' ')
+            .count();
+        if quotes > 0 && virtual_indent + spaces <= 3 {
+            offset += quote_bytes;
+            inner_quote_depth = quotes;
+            virtual_indent = 0;
+        }
     }
     let content = text[offset..].trim_start_matches(' ');
     if virtual_indent + text[offset..].len() - content.len() > 3 {
@@ -768,18 +804,19 @@ fn math_start_after_container(
                 .any(|language| word.eq_ignore_ascii_case(language))
         })
     });
-    (content.starts_with("$$") || is_math_fence).then_some((
+    (content.starts_with("$$") || is_math_fence).then_some(MathStart {
         offset,
-        depth,
+        quote_depth: depth + inner_quote_depth,
+        inner_quote_depth,
         list_context,
         virtual_indent,
-    ))
+    })
 }
 
 fn quoted_math_start(text: &str) -> Option<(usize, u32)> {
     math_start_after_container(text, None)
-        .filter(|(_, depth, _, _)| *depth > 0)
-        .map(|(offset, depth, _, _)| (offset, depth))
+        .filter(|start| start.quote_depth > 0)
+        .map(|start| (start.offset, start.quote_depth))
 }
 
 pub(crate) fn may_start_math(text: &str) -> bool {
@@ -802,15 +839,21 @@ fn container_math(
     map: &Utf16Map,
     active: Option<ListContainer>,
 ) -> Option<(BlockKind, usize)> {
-    let (offset, depth, list_context, opening_indent) =
-        math_start_after_container(lines[start].text, active)?;
+    let MathStart {
+        offset,
+        quote_depth: depth,
+        inner_quote_depth,
+        list_context,
+        virtual_indent: opening_indent,
+    } = math_start_after_container(lines[start].text, active)?;
     let first = &lines[start].text[offset..];
     let fence = opening_fence(first.trim());
     let mut logical = Vec::new();
     for (index, line) in lines.iter().enumerate().skip(start) {
         let mut virtual_indent = 0;
-        let (mut prefix, line_depth) = quote_prefix(line.text);
-        if line_depth != depth {
+        let outer_depth = depth - inner_quote_depth;
+        let (mut prefix, line_depth) = quote_prefix_up_to(line.text, outer_depth);
+        if line_depth != outer_depth {
             break;
         }
         if index == start {
@@ -830,6 +873,18 @@ fn container_math(
             };
             prefix += indent;
             virtual_indent = remainder;
+        }
+        if index > start && inner_quote_depth > 0 {
+            let spaces = line.text[prefix..]
+                .bytes()
+                .take_while(|byte| *byte == b' ')
+                .count();
+            let (quote_bytes, quotes) = quote_prefix_up_to(&line.text[prefix..], inner_quote_depth);
+            if quotes != inner_quote_depth || virtual_indent + spaces > 3 {
+                break;
+            }
+            prefix += quote_bytes;
+            virtual_indent = 0;
         }
         let content = &line.text[prefix..];
         logical.push(Line {

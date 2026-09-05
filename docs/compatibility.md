@@ -60,7 +60,9 @@ expand macros, execute code or load resources.
   nested quote depth. Recognition stops at the enclosing quote boundary;
   unclosed dollar forms remain literal, while fences end at that boundary.
 - List items support math on their marker line or in an indented continuation,
-  including nested lists and lists inside explicitly prefixed blockquotes.
+  including nested lists, lists inside explicitly prefixed blockquotes and
+  explicitly prefixed quotes inside lists. Quote depth counts both enclosing
+  and inner quote prefixes; the list indentation is relative to outer quotes.
   Fences permit blank content lines and stop when the list container ends.
 - Fences classify the first info-string word, case-insensitively: `math`,
   `latex` or `tex`. The full info string is retained. Backtick and tilde fences
@@ -87,7 +89,8 @@ adding math syntax/content metadata and `tableCells`.
 ## Known deviations and outstanding development gates
 
 - Lists remain column-based rather than a complete CommonMark container tree.
-  Quotes introduced inside list items and lazy quote continuations remain open.
+  Arbitrarily alternating list/quote containers and lazy quote continuations
+  are not covered by a full conformance result.
 - Incremental edits before math conservatively reparse the document because
   a changed ancestor list marker can alter a distant math container. Plain-note
   incremental parsing remains available; container checkpoints are not yet cached.

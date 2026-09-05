@@ -1,6 +1,82 @@
 use cindermark::{CindermarkParser, FfiBlockType};
 
 #[test]
+fn quotes_inside_lists_preserve_both_container_boundaries() {
+    for source in [
+        "- > $$\n  > α\n  > $$\n- next",
+        "- item\n  > $$α$$\n- next",
+        "> - > ~~~math\n>   > α\n>   > ~~~\n> - next",
+        "1. > > $$\n   > > α\n   > > $$\n2. next",
+    ] {
+        for grouped in [false, true] {
+            let parser = CindermarkParser::new(None);
+            let parsed = if grouped {
+                parser.parse(source.into())
+            } else {
+                parser.parse_editable(source.into())
+            };
+            let math = parsed
+                .blocks
+                .iter()
+                .find(|block| matches!(block.block_type, FfiBlockType::Math { .. }))
+                .expect(source);
+            assert_eq!(math.text, "α", "{source}");
+            assert!(matches!(
+                math.block_type,
+                FfiBlockType::Math {
+                    quote_depth: 1..,
+                    list_kind: 1..,
+                    ..
+                }
+            ));
+            assert!(parsed.blocks.len() > 1, "{source}");
+            let FfiBlockType::Math {
+                content_utf16_start,
+                content_utf16_end,
+                ..
+            } = math.block_type
+            else {
+                unreachable!()
+            };
+            let utf16: Vec<_> = source.encode_utf16().collect();
+            assert_eq!(
+                String::from_utf16(
+                    &utf16[content_utf16_start as usize..content_utf16_end as usize]
+                )
+                .unwrap(),
+                "α"
+            );
+        }
+    }
+}
+
+#[test]
+fn unclosed_quotes_inside_lists_do_not_consume_neighboring_items() {
+    for source in [
+        "- > $$\n  > α\n  outside\n- next",
+        "- > $$\n  > α\n- next\n  > $$",
+        "- > $$\n  > α\n  >\n  > β\n  > $$",
+    ] {
+        let parsed = CindermarkParser::new(None).parse_editable(source.into());
+        assert!(
+            !parsed
+                .blocks
+                .iter()
+                .any(|block| matches!(block.block_type, FfiBlockType::Math { .. })),
+            "{source}"
+        );
+    }
+    for source in [
+        "- > ~~~math\n  > α\n  outside\n- next",
+        "- > ~~~math\n  > α\n- next",
+    ] {
+        let parsed = CindermarkParser::new(None).parse_editable(source.into());
+        assert_eq!(parsed.blocks[0].text, "α");
+        assert!(parsed.blocks.len() > 1);
+    }
+}
+
+#[test]
 fn tab_indentation_preserves_columns_beyond_the_list_prefix() {
     for (source, expected) in [
         ("- $$\n\tx\n  $$", "  x"),
@@ -173,6 +249,9 @@ fn list_math_incremental_edits_match_full_parse() {
         "> - item\n>   $$x$$\nend",
         "- item\n\t$$\n\tα\n\t$$\nend",
         "- item\n\t~~~math\n\tx\n\t~~~\nend",
+        "- > $$\n  > α\n  > $$\n- next",
+        "> - > ~~~math\n>   > α\n>   > ~~~\n> - next",
+        "- item\n  > $$α$$\n- next",
     ] {
         for offset in source.char_indices().map(|(index, _)| index) {
             let parser = CindermarkParser::new(None);

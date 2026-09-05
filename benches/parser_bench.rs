@@ -132,6 +132,23 @@ fn bench_extended_syntax(c: &mut Criterion) {
     }
 }
 
+fn bench_container_math(c: &mut Criterion) {
+    let source = "- > $$\n  > \\frac{α}{β}\n  > $$\n\n".repeat(1000);
+    let parser = CindermarkParser::new(None);
+    let parsed = parser.parse_editable(source.clone());
+    assert_eq!(
+        parsed
+            .blocks
+            .iter()
+            .filter(|block| matches!(block.block_type, cindermark::FfiBlockType::Math { .. }))
+            .count(),
+        1000
+    );
+    c.bench_function("quoted_list_math_1000", |b| {
+        b.iter(|| parser.parse_editable(black_box(source.clone())))
+    });
+}
+
 criterion_group!(
     benches,
     bench_parse_500,
@@ -141,6 +158,7 @@ criterion_group!(
     bench_incremental_2500,
     bench_incremental_10k,
     bench_incremental_with_stats_2500,
-    bench_extended_syntax
+    bench_extended_syntax,
+    bench_container_math
 );
 criterion_main!(benches);
