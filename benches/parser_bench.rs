@@ -124,6 +124,13 @@ fn bench_extended_syntax(c: &mut Criterion) {
             "$\\frac{α}{β} + x^2$ and ++text++\n\n".repeat(1000),
         ),
         ("unmatched_delimiters_1mb", "\\++ $ +++ ".repeat(100_000)),
+        (
+            "unclosed_inline_html_1mb",
+            format!(
+                "prefix {} ++shown++ $y$",
+                "<!--<?<!DOCUMENT<![CDATA[".repeat(40_000)
+            ),
+        ),
     ] {
         let parser = CindermarkParser::new(None);
         c.bench_function(name, |b| {

@@ -98,6 +98,116 @@ fn opaque_inline_content_does_not_produce_underline() {
 }
 
 #[test]
+fn delimited_inline_html_is_opaque_to_extensions() {
+    // Original fixtures for CommonMark 0.31.2 §6.6, examples 625–629.
+    for html in [
+        "<!-- ++hidden++ $x$ -->",
+        "<?target ++hidden++ $x$ ?>",
+        "<!DOCUMENT ++hidden++ $x$ >",
+        "<![CDATA[++hidden++ $x$]]>",
+        "<!-- `tick` ++hidden++ $x$ -->",
+        "<!-- ++hidden++\n$x$ -->",
+    ] {
+        let source = format!("prefix {html} ++shown++ $y$");
+        let extensions: Vec<_> = kinds(&source)
+            .into_iter()
+            .filter(|kind| {
+                matches!(
+                    kind,
+                    FfiInlineType::UnderlinePlus | FfiInlineType::Math { .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            extensions,
+            vec![
+                FfiInlineType::UnderlinePlus,
+                FfiInlineType::Math {
+                    expression: "y".into()
+                }
+            ],
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn malformed_inline_html_does_not_swallow_extensions() {
+    for prefix in [
+        "<!--",
+        "<?",
+        "<!DOCUMENT",
+        "<![CDATA[",
+        r"\<!--",
+        "<!-->",
+        "<!--->",
+    ] {
+        let source = format!("prefix {prefix} ++shown++ $y$");
+        assert!(
+            kinds(&source).contains(&FfiInlineType::UnderlinePlus),
+            "{source}"
+        );
+        assert!(
+            kinds(&source).contains(&FfiInlineType::Math {
+                expression: "y".into()
+            }),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn html_attributes_do_not_open_comments_over_following_content() {
+    let source = "prefix <span title='<!--'>++shown++ $y$</span> <!-- end -->";
+    assert!(kinds(source).contains(&FfiInlineType::UnderlinePlus));
+    assert!(kinds(source).contains(&FfiInlineType::Math {
+        expression: "y".into()
+    }));
+}
+
+#[test]
+fn repeated_unclosed_inline_html_stays_bounded() {
+    let source = format!(
+        "prefix {} ++shown++ $y$",
+        "<!--<?<!DOCUMENT<![CDATA[".repeat(40_000)
+    );
+    assert!(kinds(&source).contains(&FfiInlineType::UnderlinePlus));
+}
+
+#[test]
+fn inline_html_opacity_survives_table_cells_and_incremental_edits() {
+    let original = "🍃\n\n| Content |\n| --- |\n| <!-- ++hidden++ $x$ --> ++shown++ $y$ |\n\nend";
+    let parser = CindermarkParser::new(None);
+    let parsed = parser.parse_editable(original.into());
+    let cell = &parsed
+        .blocks
+        .iter()
+        .find(|block| !block.table_cells.is_empty())
+        .unwrap()
+        .table_cells[1];
+    assert_eq!(cell.inline_spans.len(), 2);
+    assert_eq!(
+        cell.inline_spans[0].inline_type,
+        FfiInlineType::UnderlinePlus
+    );
+    assert_eq!(
+        cell.inline_spans[1].inline_type,
+        FfiInlineType::Math {
+            expression: "y".into()
+        }
+    );
+    let bytes = original.find("-->").unwrap();
+    let offset = original[..bytes].encode_utf16().count() as u32;
+    let mut edited = original.to_owned();
+    edited.replace_range(bytes..bytes + 3, "");
+    let incremental = parser.parse_editable_incremental_style_only(edited.clone(), offset, 3, 0);
+    let full = CindermarkParser::new(None).parse_editable(edited);
+    assert_eq!(incremental.blocks, full.blocks);
+    let restored = parser.parse_editable_incremental_style_only(original.into(), offset, 0, 3);
+    assert_eq!(restored.blocks, parsed.blocks);
+}
+
+#[test]
 fn inline_math_is_opaque_and_preserves_tex_escapes() {
     let expression = r"\sqrt{\$4} + **x** + ++y++";
     assert_eq!(

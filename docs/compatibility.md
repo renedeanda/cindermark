@@ -41,6 +41,10 @@ flanking with underscore-like intraword restrictions. An odd preceding
 backslash run escapes a delimiter; even runs leave it available.
 
 Code, comments, autolinks, link destinations and HTML attributes are opaque.
+Delimited inline HTML comments, processing instructions, declarations and CDATA
+also protect their contents from plus underline and math. Unclosed inline forms
+do not hide subsequent extensions. This is distinct from HTML block handling,
+which remains an outstanding conformance gate below.
 Link labels and table cells expose the new syntax. Math expressions do not
 expose underline or other Markdown spans. Nested emphasis is supported.
 

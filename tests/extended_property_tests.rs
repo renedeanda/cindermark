@@ -9,6 +9,7 @@ proptest! {
         parts in prop::collection::vec(prop::sample::select(vec![
             "$", "$$", "++", "+++", "\\", " ", "\n", "\r\n", "🍃", "e\u{301}",
             "x", "`", "**", "[[x]]", "|", "\0", "\t", "{", "}",
+            "<!--", "-->", "<?", "?>", "<![CDATA[", "]]>", "<!DOC", ">",
         ]), 0..80),
         inserted in prop::sample::select(vec!["$x$", "++x++", "🍃", "\n\n", "\\"]),
         position in any::<usize>(),

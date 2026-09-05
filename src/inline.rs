@@ -352,31 +352,7 @@ fn parse_extended_inlines(
         }
         protected[start.saturating_sub(byte_offset)..end.saturating_sub(byte_offset)].fill(false);
     }
-    // Attribute values are opaque even when the host does not render raw HTML.
-    let mut tag_start = None;
-    let mut quote = None;
-    for i in 0..text.len() {
-        if protected[i] {
-            continue;
-        }
-        if tag_start.is_some() {
-            match (quote, text[i]) {
-                (Some(q), b) if q == b => quote = None,
-                (None, b'\'' | b'"') => quote = Some(text[i]),
-                (None, b'>') => {
-                    protected[tag_start.take().unwrap_or(i)..=i].fill(true);
-                }
-                _ => {}
-            }
-        } else if text[i] == b'<'
-            && !is_escaped(text, i)
-            && text
-                .get(i + 1)
-                .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'/')
-        {
-            tag_start = Some(i);
-        }
-    }
+    protect_html(text, &mut protected);
 
     let mut math_spans = Vec::new();
     let mut math_ranges = Vec::new();
@@ -521,9 +497,77 @@ fn parse_table_spans(block: &mut BlockNode, source: &[u8], map: &Utf16Map) {
     }
 }
 
-/// Multi-backtick inline code per CommonMark: the opening backtick string must
-/// be matched by a closing backtick string of the exact same length.
-/// `code`, ``code with ` backtick``, ```code with `` inside```, etc.
+fn protect_html(text: &[u8], protected: &mut [bool]) {
+    let mut exhausted = [false; 4];
+    let mut tag_start = None;
+    let mut quote = None;
+    let mut i = 0;
+    while i < text.len() {
+        if protected[i] {
+            i += 1;
+            continue;
+        }
+        if tag_start.is_some() {
+            match (quote, text[i]) {
+                (Some(q), b) if q == b => quote = None,
+                (None, b'\'' | b'"') => quote = Some(text[i]),
+                (None, b'>') => {
+                    protected[tag_start.take().unwrap_or(i)..=i].fill(true);
+                }
+                _ => {}
+            }
+            i += 1;
+            continue;
+        }
+        if text[i] != b'<' || is_escaped(text, i) {
+            i += 1;
+            continue;
+        }
+        let tail = &text[i..];
+        let (kind, prefix_len, close): (usize, usize, &[u8]) = if tail.starts_with(b"<!-->") {
+            protected[i..i + 5].fill(true);
+            i += 5;
+            continue;
+        } else if tail.starts_with(b"<!--->") {
+            protected[i..i + 6].fill(true);
+            i += 6;
+            continue;
+        } else if tail.starts_with(b"<!--") {
+            (0, 4, b"-->")
+        } else if tail.starts_with(b"<?") {
+            (1, 2, b"?>")
+        } else if tail.starts_with(b"<![CDATA[") {
+            (2, 9, b"]]>")
+        } else if tail.starts_with(b"<!") && tail.get(2).is_some_and(u8::is_ascii_alphabetic) {
+            (3, 3, b">")
+        } else {
+            if tail
+                .get(1)
+                .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'/')
+            {
+                tag_start = Some(i);
+            }
+            i += 1;
+            continue;
+        };
+        if !exhausted[kind] {
+            if let Some(offset) = tail[prefix_len..]
+                .windows(close.len())
+                .position(|window| window == close)
+            {
+                let end = i + prefix_len + offset + close.len();
+                protected[i..end].fill(true);
+                i = end;
+                continue;
+            }
+            // Once absent from this suffix, a terminator cannot occur farther on.
+            exhausted[kind] = true;
+        }
+        i += prefix_len;
+    }
+}
+
+/// Multi-backtick inline code requires matching delimiter-run lengths.
 fn parse_inline_code(
     text: &[u8],
     byte_offset: usize,

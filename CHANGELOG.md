@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conformance from the CommonMark baseline.
 
 ### Fixed
+- Inline HTML comments, processing instructions, declarations and CDATA no longer
+  expose plus underline or dollar math; repeated unclosed forms use bounded scans.
 - Preview formatting no longer pairs across separate blocks; math keeps readable
   fallback and truncated spans stay within surrogate-safe text bounds.
 - Dollar-math closing indentation is bounded, and TeX body lines remain opaque.
