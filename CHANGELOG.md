@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Bounded repeated list/quote projection for math and raw HTML, including
+  continuation lines, sibling boundaries and quote-marker tab columns.
 - Opaque top-level HTML blocks with exact source, appended UniFFI `RawHtml`,
   WASM transport and literal preview fallback.
 - List/quote-contained HTML shares math's container projection, preserving raw

@@ -67,6 +67,12 @@ expand macros, execute code or load resources.
   explicitly prefixed quotes inside lists. Quote depth counts both enclosing
   and inner quote prefixes; the list indentation is relative to outer quotes.
   Fences permit blank content lines and stop when the list container ends.
+- Repeated explicit list/quote alternation is projected through each enclosing
+  prefix, including indented continuations and sibling boundaries. The existing
+  flat AST retains the outer list owner and source marker; `quote_depth` counts
+  all enclosing quotes. Up to 16 further list transitions are recognized below
+  that owner; deeper paths stay literal. A quote marker followed by a tab consumes
+  one whitespace column and preserves remaining columns as derived indentation.
 - Fences classify the first info-string word, case-insensitively: `math`,
   `latex` or `tex`. The full info string is retained. Backtick and tilde fences
   require at least three identical characters; closing fences use the same
@@ -106,8 +112,9 @@ adding math syntax/content metadata and `tableCells`.
 ## Known deviations and outstanding development gates
 
 - Lists remain column-based rather than a complete CommonMark container tree.
-  Arbitrarily alternating list/quote containers and lazy quote continuations
-  are not covered by a full conformance result.
+  Explicit compound containers have targeted fixtures, not a full conformance
+  result. Lazy quote continuations remain an outstanding baseline compatibility
+  area; math and HTML leaf bodies require their explicit enclosing prefixes.
 - Incremental edits before math or raw HTML conservatively reparse the document because
   a changed ancestor list marker can alter a distant math container. Plain-note
   incremental parsing remains available; container checkpoints are not yet cached.

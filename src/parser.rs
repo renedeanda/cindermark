@@ -1,13 +1,6 @@
 #![allow(clippy::manual_strip)]
-//! Block-level parser producing a `Document` from source text.
-//!
-//! Matches the exact semantics of `MarkdownParser.swift`:
-//! - Same block detection priority order
-//! - Same line grouping rules for lists, blockquotes, paragraphs
-//! - Two parse modes: Grouped (for rendering) and Editable (for block editor)
-//!
-//! Operates on raw source bytes with line-oriented scanning. The inline parser
-//! (`inline.rs`) runs on each block's text content after block parsing.
+//! Source-preserving block parser with grouped and editable modes.
+//! Inline spans are added after block boundaries are known.
 
 use crate::ast::*;
 use crate::inline;
@@ -724,26 +717,49 @@ fn quote_prefix(text: &str) -> (usize, u32) {
 }
 
 fn quote_prefix_up_to(text: &str, limit: u32) -> (usize, u32) {
+    let (offset, depth, _) = quote_prefix_data(text, limit, 0);
+    (offset, depth)
+}
+
+fn quote_prefix_data(text: &str, limit: u32, initial_column: usize) -> (usize, u32, usize) {
     let mut offset = 0;
     let mut depth = 0;
+    let mut column = initial_column;
+    let mut padding = 0;
     while depth < limit {
         let spaces = text[offset..].bytes().take_while(|b| *b == b' ').count();
-        if spaces > 3 || text.as_bytes().get(offset + spaces) != Some(&b'>') {
+        if padding + spaces > 3 || text.as_bytes().get(offset + spaces) != Some(&b'>') {
             break;
         }
         offset += spaces + 1;
-        if text.as_bytes().get(offset) == Some(&b' ') {
-            offset += 1;
+        column += spaces + 1;
+        padding = 0;
+        match text.as_bytes().get(offset) {
+            Some(b' ') => {
+                offset += 1;
+                column += 1;
+            }
+            Some(b'\t') => {
+                offset += 1;
+                let width = 4 - column % 4;
+                column += width;
+                padding = width - 1;
+            }
+            _ => {}
         }
         depth += 1;
     }
-    (offset, depth)
+    (offset, depth, padding)
 }
+
+// Each bounded path step stores an intervening quote depth and list indentation.
+type NestedContainerPath = [(u32, u32); 16];
 
 #[derive(Clone, Copy)]
 struct ListContainer {
     quote_depth: u32,
     context: MathListContext,
+    nested: NestedContainerPath,
 }
 
 #[derive(Clone, Copy)]
@@ -753,14 +769,20 @@ struct ContainerStart {
     inner_quote_depth: u32,
     list_context: Option<MathListContext>,
     virtual_indent: usize,
+    nested: NestedContainerPath,
+    has_marker: bool,
 }
 
 fn list_outer_quote_prefix(text: &str, active: Option<ListContainer>) -> (usize, u32) {
     if let Some(container) = active {
-        let (offset, depth) = quote_prefix_up_to(text, container.quote_depth);
+        let (offset, depth, padding) = quote_prefix_data(text, container.quote_depth, 0);
         if depth == container.quote_depth
-            && strip_container_indent(&text[offset..], container.context.content_indent as usize)
-                .is_some()
+            && strip_padded_indent(
+                &text[offset..],
+                container.context.content_indent as usize,
+                padding,
+            )
+            .is_some()
         {
             return (offset, depth);
         }
@@ -805,14 +827,20 @@ fn marker_context(marker: &ParsedListMarker<'_>, text: &str) -> MathListContext 
     }
 }
 
+fn strip_padded_indent(text: &str, required: usize, padding: usize) -> Option<(usize, usize)> {
+    let (offset, remainder) = strip_container_indent(text, required.saturating_sub(padding))?;
+    Some((offset, remainder + padding.saturating_sub(required)))
+}
+
 fn update_list_context(text: &str, contexts: &mut Vec<ListContainer>) {
     let (prefix, quote_depth) = list_outer_quote_prefix(text, contexts.last().copied());
+    let (_, _, padding) = quote_prefix_data(text, quote_depth, 0);
     let content = &text[prefix..];
     if content.trim().is_empty() {
         return;
     }
     let indent_bytes = content.len() - content.trim_start_matches([' ', '\t']).len();
-    let indent = column_width(&content[..indent_bytes]);
+    let indent = column_width(&content[..indent_bytes]) + padding;
     while contexts.last().is_some_and(|container| {
         container.quote_depth != quote_depth || indent < container.context.content_indent as usize
     }) {
@@ -825,20 +853,32 @@ fn update_list_context(text: &str, contexts: &mut Vec<ListContainer>) {
         return;
     }
     if let Some(marker) = parse_list_marker(content) {
+        let mut context = marker_context(&marker, content);
+        context.content_indent += padding as u32;
         contexts.push(ListContainer {
             quote_depth,
-            context: marker_context(&marker, content),
+            context,
+            nested: [(0, 0); 16],
         });
+    }
+    if let Some(active) = contexts.last_mut() {
+        if let Some(start) = start_after_container(text, Some(*active)) {
+            active.nested = start.nested;
+        }
     }
 }
 
 fn start_after_container(text: &str, active: Option<ListContainer>) -> Option<ContainerStart> {
     let (quote_offset, depth) = list_outer_quote_prefix(text, active);
+    let (_, _, quote_padding) = quote_prefix_data(text, depth, 0);
     let content = &text[quote_offset..];
-    let (mut offset, list_context, mut virtual_indent) =
+    let mut has_marker = false;
+    let (mut offset, list_context, mut virtual_indent, inherited) =
         if let Some(marker) = parse_list_marker(content) {
-            let context = marker_context(&marker, content);
-            let indent = column_width(&content[..marker.marker_start]);
+            has_marker = true;
+            let mut context = marker_context(&marker, content);
+            context.content_indent += quote_padding as u32;
+            let indent = column_width(&content[..marker.marker_start]) + quote_padding;
             let fits_container = indent <= 3
                 || active.is_some_and(|container| {
                     let parent_indent = container.context.content_indent as usize;
@@ -849,28 +889,78 @@ fn start_after_container(text: &str, active: Option<ListContainer>) -> Option<Co
             if !fits_container {
                 return None;
             }
-            (quote_offset + marker.content_start, Some(context), 0)
+            (
+                quote_offset + marker.content_start,
+                Some(context),
+                0,
+                [(0, 0); 16],
+            )
         } else if let Some(container) = active.filter(|container| container.quote_depth == depth) {
-            let (indent, remainder) =
-                strip_container_indent(content, container.context.content_indent as usize)?;
-            (quote_offset + indent, Some(container.context), remainder)
+            let (indent, remainder) = strip_padded_indent(
+                content,
+                container.context.content_indent as usize,
+                quote_padding,
+            )?;
+            (
+                quote_offset + indent,
+                Some(container.context),
+                remainder,
+                container.nested,
+            )
         } else {
-            (quote_offset, None, 0)
+            (quote_offset, None, quote_padding, [(0, 0); 16])
         };
     if depth == 0 && list_context.is_none() {
         return None;
     }
     let mut inner_quote_depth = 0;
+    let mut nested = [(0, 0); 16];
+    let mut count = 0;
     if list_context.is_some() {
-        let (quote_bytes, quotes) = quote_prefix(&text[offset..]);
-        let spaces = text[offset..]
-            .bytes()
-            .take_while(|byte| *byte == b' ')
-            .count();
-        if quotes > 0 && virtual_indent + spaces <= 3 {
-            offset += quote_bytes;
-            inner_quote_depth = quotes;
-            virtual_indent = 0;
+        for step in inherited.into_iter().take_while(|step| step.1 > 0) {
+            let Some((next, padding)) = nested_container_prefix(text, offset, virtual_indent, step)
+            else {
+                break;
+            };
+            offset = next;
+            virtual_indent = padding;
+            nested[count] = step;
+            count += 1;
+        }
+        loop {
+            let (quote_bytes, quotes, padding) =
+                quote_prefix_data(&text[offset..], u32::MAX, column_width(&text[..offset]));
+            let spaces = text[offset..]
+                .bytes()
+                .take_while(|byte| *byte == b' ')
+                .count();
+            if quotes > 0 && virtual_indent + spaces > 3 {
+                break;
+            }
+            let marker_text = &text[offset + quote_bytes..];
+            let marker_padding = if quotes == 0 { virtual_indent } else { padding };
+            if let Some(marker) = parse_list_marker(marker_text).filter(|marker| {
+                column_width(&marker_text[..marker.marker_start]) + marker_padding <= 3
+            }) {
+                if count == nested.len() {
+                    return None;
+                }
+                has_marker = true;
+                nested[count] = (
+                    quotes,
+                    marker_context(&marker, marker_text).content_indent + marker_padding as u32,
+                );
+                count += 1;
+                offset += quote_bytes + marker.content_start;
+                virtual_indent = 0;
+                continue;
+            }
+            if quotes > 0 {
+                offset += quote_bytes;
+                inner_quote_depth = quotes;
+                virtual_indent = padding;
+            }
+            break;
         }
     }
     let content = text[offset..].trim_start_matches(' ');
@@ -879,11 +969,43 @@ fn start_after_container(text: &str, active: Option<ListContainer>) -> Option<Co
     }
     Some(ContainerStart {
         offset,
-        quote_depth: depth + inner_quote_depth,
+        quote_depth: depth + inner_quote_depth + nested.iter().map(|step| step.0).sum::<u32>(),
         inner_quote_depth,
         list_context,
         virtual_indent,
+        nested,
+        has_marker,
     })
+}
+
+fn nested_container_prefix(
+    text: &str,
+    offset: usize,
+    virtual_indent: usize,
+    step: (u32, u32),
+) -> Option<(usize, usize)> {
+    let spaces = text[offset..]
+        .bytes()
+        .take_while(|byte| *byte == b' ')
+        .count();
+    let (prefix, depth, padding) =
+        quote_prefix_data(&text[offset..], step.0, column_width(&text[..offset]));
+    if depth != step.0 || (depth > 0 && virtual_indent + spaces > 3) {
+        return None;
+    }
+    let offset = offset + prefix;
+    let padding = if depth == 0 { virtual_indent } else { padding };
+    let required = (step.1 as usize).saturating_sub(padding);
+    let (indent, remaining) = strip_container_indent(&text[offset..], required).or_else(|| {
+        text[offset..]
+            .trim()
+            .is_empty()
+            .then_some((text.len() - offset, 0))
+    })?;
+    Some((
+        offset + indent,
+        remaining + padding.saturating_sub(step.1 as usize),
+    ))
 }
 
 fn math_start_after_container(text: &str, active: Option<ListContainer>) -> Option<ContainerStart> {
@@ -912,10 +1034,8 @@ fn html_start_after_container(
 }
 
 fn html_interrupts_container(text: &str, active: Option<ListContainer>) -> bool {
-    html_start_after_container(text, active).is_some_and(|(_, html)| {
-        let (prefix, _) = list_outer_quote_prefix(text, active);
-        html.interrupts_paragraph || parse_list_marker(&text[prefix..]).is_some()
-    })
+    html_start_after_container(text, active)
+        .is_some_and(|(start, html)| html.interrupts_paragraph || start.has_marker)
 }
 
 pub(crate) fn may_start_html(text: &str) -> bool {
@@ -923,40 +1043,53 @@ pub(crate) fn may_start_html(text: &str) -> bool {
 }
 
 fn container_line<'a>(line: &Line<'a>, first: bool, start: ContainerStart) -> Option<Line<'a>> {
-    let outer_depth = start.quote_depth - start.inner_quote_depth;
-    let (mut prefix, line_depth) = quote_prefix_up_to(line.text, outer_depth);
+    let outer_depth = start.quote_depth
+        - start.inner_quote_depth
+        - start.nested.iter().map(|step| step.0).sum::<u32>();
+    let (mut prefix, line_depth, quote_padding) = quote_prefix_data(line.text, outer_depth, 0);
     if line_depth != outer_depth {
         return None;
     }
-    let mut virtual_indent = 0;
+    let mut virtual_indent = quote_padding;
     if first {
         prefix = start.offset;
         virtual_indent = start.virtual_indent;
     } else if let Some(context) = start.list_context {
-        let (indent, remainder) =
-            strip_container_indent(&line.text[prefix..], context.content_indent as usize).or_else(
-                || {
-                    line.text[prefix..]
-                        .trim()
-                        .is_empty()
-                        .then_some((line.text.len() - prefix, 0))
-                },
-            )?;
+        let (indent, remainder) = strip_padded_indent(
+            &line.text[prefix..],
+            context.content_indent as usize,
+            quote_padding,
+        )
+        .or_else(|| {
+            line.text[prefix..]
+                .trim()
+                .is_empty()
+                .then_some((line.text.len() - prefix, 0))
+        })?;
         prefix += indent;
         virtual_indent = remainder;
+    }
+    if !first {
+        for step in start.nested.into_iter().take_while(|step| step.1 > 0) {
+            (prefix, virtual_indent) =
+                nested_container_prefix(line.text, prefix, virtual_indent, step)?;
+        }
     }
     if !first && start.inner_quote_depth > 0 {
         let spaces = line.text[prefix..]
             .bytes()
             .take_while(|byte| *byte == b' ')
             .count();
-        let (quote_bytes, quotes) =
-            quote_prefix_up_to(&line.text[prefix..], start.inner_quote_depth);
+        let (quote_bytes, quotes, padding) = quote_prefix_data(
+            &line.text[prefix..],
+            start.inner_quote_depth,
+            column_width(&line.text[..prefix]),
+        );
         if quotes != start.inner_quote_depth || virtual_indent + spaces > 3 {
             return None;
         }
         prefix += quote_bytes;
-        virtual_indent = 0;
+        virtual_indent = padding;
     }
     Some(Line {
         text: &line.text[prefix..],
@@ -974,8 +1107,7 @@ fn container_html(
     previous: Option<&BlockNode>,
 ) -> Option<(BlockKind, usize)> {
     let (container, html) = html_start_after_container(lines[start].text, active)?;
-    let (prefix, _) = list_outer_quote_prefix(lines[start].text, active);
-    let new_item = parse_list_marker(&lines[start].text[prefix..]).is_some();
+    let new_item = container.has_marker;
     if !html.interrupts_paragraph && !new_item && start > 0 {
         let paragraph_open = previous.is_some_and(|block| {
             block.line_end == start as u32
@@ -994,7 +1126,8 @@ fn container_html(
         let preceding_content = container_line(&lines[start - 1], false, container).or_else(|| {
             let preceding = start_after_container(lines[start - 1].text, active)?;
             (preceding.list_context == container.list_context
-                && preceding.quote_depth == container.quote_depth)
+                && preceding.quote_depth == container.quote_depth
+                && preceding.nested == container.nested)
                 .then(|| container_line(&lines[start - 1], true, preceding))
                 .flatten()
         });

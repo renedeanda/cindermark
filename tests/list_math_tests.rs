@@ -1,6 +1,190 @@
 use cindermark::{CindermarkParser, FfiBlockType};
 
 #[test]
+fn alternating_container_prefixes_keep_math_bounded() {
+    for source in [
+        "- > - > $$\n  >   > α\n  >   > $$\n- next",
+        "> - > 1. ~~~math\n>   >    α\n>   >    ~~~\n> - next",
+        "- outer\n  > - inner\n  >   > $$α$$\n- next",
+    ] {
+        for grouped in [false, true] {
+            let parser = CindermarkParser::new(None);
+            let parsed = if grouped {
+                parser.parse(source.into())
+            } else {
+                parser.parse_editable(source.into())
+            };
+            let math = parsed
+                .blocks
+                .iter()
+                .find(|block| matches!(block.block_type, FfiBlockType::Math { .. }))
+                .expect(source);
+            assert_eq!(math.text, "α", "{source}");
+            assert!(parsed.blocks.len() > 1, "{source}");
+            let FfiBlockType::Math {
+                content_utf16_start,
+                content_utf16_end,
+                ..
+            } = math.block_type
+            else {
+                unreachable!()
+            };
+            let utf16: Vec<_> = source.encode_utf16().collect();
+            assert_eq!(
+                String::from_utf16(
+                    &utf16[content_utf16_start as usize..content_utf16_end as usize]
+                )
+                .unwrap(),
+                "α"
+            );
+        }
+    }
+}
+
+#[test]
+fn tab_after_quote_marker_preserves_math_indentation() {
+    for (source, expected) in [
+        (">\t$$α$$", "α"),
+        (">\t$$\n>\tα\n>\t$$", "  α"),
+        (">\t~~~math\n> x\n>   y\n>\t~~~", "x\ny"),
+    ] {
+        let parsed = CindermarkParser::new(None).parse_editable(source.into());
+        let math = parsed
+            .blocks
+            .iter()
+            .find(|block| matches!(block.block_type, FfiBlockType::Math { .. }))
+            .expect(source);
+        assert_eq!(math.text, expected, "{source}");
+    }
+}
+
+#[test]
+fn quote_list_tabs_match_expanded_container_columns() {
+    // Original extension fixtures for CommonMark §2.2, examples 4–9.
+    for source in [
+        ">\t- $$\n>\t  α\n>\t  $$",
+        "- >\t$$\n  >\tα\n  >\t$$",
+        ">\t- >\t~~~math\n>\t  >\tx\n>\t  >\t~~~",
+        "-\t> $$\n\t> α\n\t> $$",
+    ] {
+        let mut expanded = String::new();
+        let mut column = 0;
+        for ch in source.chars() {
+            if ch == '\t' {
+                let width = 4 - column % 4;
+                expanded.extend(std::iter::repeat_n(' ', width));
+                column += width;
+            } else {
+                expanded.push(ch);
+                column = if ch == '\n' { 0 } else { column + 1 };
+            }
+        }
+        let parser = CindermarkParser::new(None);
+        let actual = parser.parse_editable(source.into());
+        let expected = parser.parse_editable(expanded.clone());
+        let actual = actual
+            .blocks
+            .iter()
+            .find(|block| matches!(block.block_type, FfiBlockType::Math { .. }))
+            .expect(source);
+        let expected = expected
+            .blocks
+            .iter()
+            .find(|block| matches!(block.block_type, FfiBlockType::Math { .. }))
+            .expect(&expanded);
+        assert_eq!(actual.text, expected.text, "{source}");
+    }
+}
+
+#[test]
+fn compound_containers_stop_at_siblings_and_preserve_incremental_ranges() {
+    for source in [
+        "🍃\r\n- > - > $$\r\n  >   > α\r\n  >   > $$\r\n- next",
+        "🍃\n- > - > ~~~math\n  >   > α\n  > - sibling\n- next",
+    ] {
+        let parser = CindermarkParser::new(None);
+        let original = parser.parse_editable(source.into());
+        let math = original
+            .blocks
+            .iter()
+            .find(|block| matches!(block.block_type, FfiBlockType::Math { .. }))
+            .expect(source);
+        assert_eq!(math.text, "α");
+        let byte = source.find('α').unwrap();
+        let offset = source[..byte].encode_utf16().count() as u32;
+        let mut changed = source.to_owned();
+        changed.insert(byte, '🌲');
+        let actual = parser.parse_editable_incremental_style_only(changed.clone(), offset, 0, 2);
+        assert_eq!(
+            actual.blocks,
+            CindermarkParser::new(None).parse_editable(changed).blocks
+        );
+        assert_eq!(
+            parser
+                .parse_editable_incremental_style_only(source.into(), offset, 2, 0)
+                .blocks,
+            original.blocks
+        );
+    }
+    for source in [
+        "- > - > $$\n  >   > α\n  > - sibling\n  >   > $$",
+        ">\t- $$\n>    α\n>    $$",
+    ] {
+        assert!(
+            !CindermarkParser::new(None)
+                .parse_editable(source.into())
+                .blocks
+                .iter()
+                .any(|block| matches!(block.block_type, FfiBlockType::Math { .. })),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn compound_container_depth_is_bounded_with_literal_fallback() {
+    for depth in [0, 1, 8, 16, 17] {
+        let source = format!("- > {}$$α$$\n- next", "- > ".repeat(depth));
+        let doc = CindermarkParser::new(None).parse_editable(source.clone());
+        let math = doc
+            .blocks
+            .iter()
+            .find(|block| matches!(block.block_type, FfiBlockType::Math { .. }));
+        assert_eq!(math.is_some(), depth <= 16, "{source}");
+        if let Some(math) = math {
+            assert_eq!(math.text, "α");
+            assert!(
+                matches!(math.block_type, FfiBlockType::Math { quote_depth, .. } if quote_depth == depth as u32 + 1)
+            );
+        }
+    }
+}
+
+#[test]
+fn compound_ancestor_edits_match_full_reparsing() {
+    let source = "🍃\n- outer\n  > - inner\n  >   > $$α$$\n- next";
+    for needle in ["- outer", "> - inner", "- inner"] {
+        let byte = source.find(needle).unwrap();
+        let offset = source[..byte].encode_utf16().count() as u32;
+        let parser = CindermarkParser::new(None);
+        let original = parser.parse_editable(source.into());
+        let mut changed = source.to_owned();
+        changed.replace_range(byte..byte + 1, " ");
+        let actual = parser.parse_editable_incremental_style_only(changed.clone(), offset, 1, 1);
+        assert_eq!(
+            actual.blocks,
+            CindermarkParser::new(None).parse_editable(changed).blocks
+        );
+        assert_eq!(
+            parser
+                .parse_editable_incremental_style_only(source.into(), offset, 1, 1)
+                .blocks,
+            original.blocks
+        );
+    }
+}
+
+#[test]
 fn quotes_inside_lists_preserve_both_container_boundaries() {
     for source in [
         "- > $$\n  > α\n  > $$\n- next",

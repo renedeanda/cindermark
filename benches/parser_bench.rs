@@ -180,6 +180,42 @@ fn bench_container_html(c: &mut Criterion) {
     });
 }
 
+fn bench_compound_containers(c: &mut Criterion) {
+    for (name, unit, math) in [
+        (
+            "alternating_list_math_1000",
+            "- > - > $$\n  >   > \\frac{α}{β}\n  >   > $$\n\n",
+            true,
+        ),
+        (
+            "alternating_list_html_1000",
+            "- > - > <!--\n  >   > $$x$$ ++hidden++\n  >   > -->\n\n",
+            false,
+        ),
+    ] {
+        let source = unit.repeat(1000);
+        let parser = CindermarkParser::new(None);
+        let parsed = parser.parse_editable(source.clone());
+        assert_eq!(
+            parsed
+                .blocks
+                .iter()
+                .filter(|block| {
+                    if math {
+                        matches!(block.block_type, cindermark::FfiBlockType::Math { .. })
+                    } else {
+                        matches!(block.block_type, cindermark::FfiBlockType::RawHtml)
+                    }
+                })
+                .count(),
+            1000
+        );
+        c.bench_function(name, |b| {
+            b.iter(|| parser.parse_editable(black_box(source.clone())))
+        });
+    }
+}
+
 criterion_group!(
     benches,
     bench_parse_500,
@@ -191,6 +227,7 @@ criterion_group!(
     bench_incremental_with_stats_2500,
     bench_extended_syntax,
     bench_container_math,
-    bench_container_html
+    bench_container_html,
+    bench_compound_containers
 );
 criterion_main!(benches);

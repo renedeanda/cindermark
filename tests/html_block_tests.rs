@@ -1,6 +1,49 @@
 use cindermark::{CindermarkParser, FfiBlockType};
 
 #[test]
+fn custom_html_can_start_a_new_nested_list_item() {
+    let source = "- outer\n  > - before\n  > - <custom>\n  >   ++hidden++ $x$\n\n- next";
+    for grouped in [false, true] {
+        let parser = CindermarkParser::new(None);
+        let doc = if grouped {
+            parser.parse(source.into())
+        } else {
+            parser.parse_editable(source.into())
+        };
+        let html = doc
+            .blocks
+            .iter()
+            .find(|block| block.block_type == FfiBlockType::RawHtml)
+            .expect(source);
+        assert_eq!(html.text, "  > - <custom>\n  >   ++hidden++ $x$\n");
+        assert!(html.inline_spans.is_empty());
+    }
+}
+
+#[test]
+fn alternating_containers_keep_html_opaque_and_bounded() {
+    for raw in [
+        "- > - > <!--\r\n  >   > ++hidden++ $x$\r\n  >   > -->\r\n",
+        ">\t- > <!--\n>\t  > ++hidden++ $x$\n>\t  > -->\n",
+    ] {
+        let source = format!("{raw}- $shown$");
+        for grouped in [false, true] {
+            let parser = CindermarkParser::new(None);
+            let doc = if grouped {
+                parser.parse(source.clone())
+            } else {
+                parser.parse_editable(source.clone())
+            };
+            assert_eq!(doc.blocks[0].block_type, FfiBlockType::RawHtml);
+            assert_eq!(doc.blocks[0].text, raw);
+            assert!(doc.blocks[0].inline_spans.is_empty());
+            assert_eq!(doc.blocks[0].utf16_end, raw.encode_utf16().count() as u32);
+            assert!(doc.blocks.len() > 1);
+        }
+    }
+}
+
+#[test]
 fn delimited_html_blocks_preserve_source_and_hide_markdown() {
     // Original fixtures for CommonMark §4.6, examples 171–182.
     for (open, close) in [
