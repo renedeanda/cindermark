@@ -123,3 +123,128 @@ fn same_line_html_terminator_keeps_the_entire_line_opaque() {
     assert!(doc.blocks[0].inline_spans.is_empty());
     assert_eq!(doc.blocks[1].inline_spans.len(), 1);
 }
+
+#[test]
+fn container_html_is_opaque_and_stops_at_its_boundary() {
+    for raw in [
+        "> <script>\n> $$x$$\n> ++hidden++ [[Hidden]]\n",
+        "> > <!--\n> > $$x$$\n> > ++hidden++\n",
+        "- <script>\n  $$x$$\n  ++hidden++ [[Hidden]]\n",
+        "003) <script>\n     $$x$$\n     ++hidden++\n",
+        "- [x] <script>\n  $$x$$\n  ++hidden++\n",
+        "- > <script>\n  > $$x$$\n  > ++hidden++\n",
+        "> - <script>\n>   $$x$$\n>   ++hidden++\n",
+        "> - > <script>\n>   > $$x$$\n>   > ++hidden++\n",
+        "-\t<script>\r\n\t$$x$$\r\n\t++hidden++\r\n",
+    ] {
+        let source = format!("{raw}outside $shown$");
+        for grouped in [false, true] {
+            let parser = CindermarkParser::new(None);
+            let doc = if grouped {
+                parser.parse(source.clone())
+            } else {
+                parser.parse_editable(source.clone())
+            };
+            assert_eq!(doc.blocks[0].block_type, FfiBlockType::RawHtml, "{source}");
+            assert_eq!(doc.blocks[0].text, raw);
+            assert!(doc.blocks[0].inline_spans.is_empty());
+            assert!(doc.wiki_links.is_empty());
+            assert_eq!(doc.blocks.len(), 2, "{source}");
+            assert_eq!(doc.blocks[1].inline_spans.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn container_html_interrupts_existing_content_without_swallowing_siblings() {
+    for source in [
+        "- first\n- <script>\n  $$hidden$$\n- sibling $shown$",
+        "1. first\n2. <script>\n   $$hidden$$\n3. sibling $shown$",
+        "- first\n  <script>\n  $$hidden$$\n- sibling $shown$",
+        "> first\n> <script>\n> $$hidden$$\noutside $shown$",
+        "- first\n  > <script>\n  > $$hidden$$\n- sibling $shown$",
+    ] {
+        let parser = CindermarkParser::new(None);
+        for doc in [
+            parser.parse_editable(source.into()),
+            parser.parse(source.into()),
+        ] {
+            let raw = doc
+                .blocks
+                .iter()
+                .find(|block| block.block_type == FfiBlockType::RawHtml)
+                .expect(source);
+            assert!(raw.text.contains("$$hidden$$"));
+            assert!(!raw.text.contains("shown"));
+            assert!(raw.inline_spans.is_empty());
+        }
+    }
+}
+
+#[test]
+fn type_seven_does_not_interrupt_container_paragraphs() {
+    for source in [
+        "> before\n> <custom-tag>\n> $shown$",
+        "- before\n  <custom-tag>\n  $shown$",
+    ] {
+        let parser = CindermarkParser::new(None);
+        for doc in [
+            parser.parse(source.into()),
+            parser.parse_editable(source.into()),
+        ] {
+            assert!(
+                doc.blocks
+                    .iter()
+                    .all(|block| block.block_type != FfiBlockType::RawHtml),
+                "{source}"
+            );
+        }
+    }
+    let doc = CindermarkParser::new(None)
+        .parse("> before\n>\n> <custom-tag>\n> $$hidden$$\n\noutside".into());
+    assert!(doc
+        .blocks
+        .iter()
+        .any(|block| block.block_type == FfiBlockType::RawHtml));
+}
+
+#[test]
+fn container_prefix_edits_recompute_distant_html_boundaries() {
+    let source = "- parent\n\n  <script>\n  $$hidden$$\n  </script>\n\n$shown$";
+    let parser = CindermarkParser::new(None);
+    parser.parse_editable(source.into());
+    let edited = source.replacen("- parent", "parent", 1);
+    let incremental = parser.parse_editable_incremental_style_only(edited.clone(), 0, 2, 0);
+    assert_eq!(
+        incremental.blocks,
+        CindermarkParser::new(None).parse_editable(edited).blocks
+    );
+}
+
+#[test]
+fn editable_custom_tag_continuation_retains_paragraph_context_after_edits() {
+    let source = "- before\n  <custom-tag>\n  ordinary body\n\noutside";
+    let parser = CindermarkParser::new(None);
+    parser.parse_editable(source.into());
+    let offset = source.find("body").unwrap();
+    let edited = source.replace("body", "bodies");
+    let incremental =
+        parser.parse_editable_incremental_style_only(edited.clone(), offset as u32, 4, 6);
+    assert_eq!(
+        incremental.blocks,
+        CindermarkParser::new(None).parse_editable(edited).blocks
+    );
+}
+
+#[test]
+fn quoted_html_retains_list_marker_ranges_and_parent_quote_boundary() {
+    let source = "> 003) <script>\r\n>      $$hidden$$\r\n> sibling $shown$";
+    let doc = CindermarkParser::new(None).parse_editable(source.into());
+    let raw = &doc.blocks[0];
+    assert_eq!(raw.block_type, FfiBlockType::RawHtml);
+    assert_eq!(raw.marker_source, "003) ");
+    assert_eq!(raw.ordered_raw_number, "003");
+    assert_eq!((raw.marker_utf16_start, raw.marker_utf16_end), (2, 7));
+    assert!(!raw.text.contains("sibling"));
+    assert_eq!(doc.blocks[1].inline_spans.len(), 1);
+}

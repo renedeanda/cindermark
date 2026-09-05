@@ -126,6 +126,28 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
         }
 
         update_list_context(line.text, &mut list_contexts);
+        if let Some((kind, end_line)) = container_html(
+            &lines,
+            i,
+            source,
+            list_contexts.last().copied(),
+            blocks.last(),
+        ) {
+            let mut block = make_block(kind, &lines, i, end_line, bytes, &utf16_map);
+            let (prefix, _) = quote_prefix(line.text);
+            if let Some(marker) = parse_list_marker(&line.text[prefix..]) {
+                let logical_line = Line {
+                    text: &line.text[prefix..],
+                    byte_start: line.byte_start + prefix,
+                    byte_end: line.byte_end,
+                    virtual_indent: 0,
+                };
+                block.list_marker = Some(marker_to_meta(&marker, &logical_line, bytes, &utf16_map));
+            }
+            blocks.push(block);
+            i = end_line;
+            continue;
+        }
         if let Some((kind, end_line)) =
             container_math(&lines, i, bytes, &utf16_map, list_contexts.last().copied())
         {
@@ -189,7 +211,9 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             continue;
         }
 
-        if let Some(html) = crate::html::block_start(line.text) {
+        if let Some(html) = crate::html::block_start(line.text)
+            .filter(|_| start_after_container(line.text, list_contexts.last().copied()).is_none())
+        {
             let start_line = i;
             while i < lines.len() {
                 if matches!(html.end, crate::html::HtmlEnd::Blank)
@@ -351,7 +375,18 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             let mut quote_lines: Vec<&str> = Vec::new();
             while i < lines.len() {
                 let ql = lines[i].text.trim();
-                if i > start_line && quoted_math_start(lines[i].text).is_some() {
+                if i > start_line
+                    && (quoted_math_start(lines[i].text).is_some()
+                        || html_interrupts_container(lines[i].text, list_contexts.last().copied())
+                        || (quote_lines
+                            .last()
+                            .is_some_and(|line| line.trim().is_empty())
+                            && html_start_after_container(
+                                lines[i].text,
+                                list_contexts.last().copied(),
+                            )
+                            .is_some()))
+                {
                     break;
                 }
                 if ql.starts_with("> ") {
@@ -435,6 +470,14 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                     let mut items: Vec<String> = Vec::new();
                     while i < lines.len() {
                         if i > start_line
+                            && html_interrupts_container(
+                                lines[i].text,
+                                list_contexts.last().copied(),
+                            )
+                        {
+                            break;
+                        }
+                        if i > start_line
                             && math_start_after_container(
                                 lines[i].text,
                                 list_contexts.last().copied(),
@@ -513,6 +556,14 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
                     let first_marker = marker.clone();
                     let mut items: Vec<String> = Vec::new();
                     while i < lines.len() {
+                        if i > start_line
+                            && html_interrupts_container(
+                                lines[i].text,
+                                list_contexts.last().copied(),
+                            )
+                        {
+                            break;
+                        }
                         if i > start_line
                             && math_start_after_container(
                                 lines[i].text,
@@ -595,6 +646,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             let pl = lines[i].text;
             let pt = pl.trim();
             if pt.is_empty()
+                || html_interrupts_container(pl, list_contexts.last().copied())
                 || crate::html::block_start(pl).is_some_and(|html| html.interrupts_paragraph)
                 || opening_fence(pt).is_some()
                 || (i > start_line && pt.starts_with("$$"))
@@ -694,7 +746,8 @@ struct ListContainer {
     context: MathListContext,
 }
 
-struct MathStart {
+#[derive(Clone, Copy)]
+struct ContainerStart {
     offset: usize,
     quote_depth: u32,
     inner_quote_depth: u32,
@@ -779,7 +832,7 @@ fn update_list_context(text: &str, contexts: &mut Vec<ListContainer>) {
     }
 }
 
-fn math_start_after_container(text: &str, active: Option<ListContainer>) -> Option<MathStart> {
+fn start_after_container(text: &str, active: Option<ListContainer>) -> Option<ContainerStart> {
     let (quote_offset, depth) = list_outer_quote_prefix(text, active);
     let content = &text[quote_offset..];
     let (mut offset, list_context, mut virtual_indent) =
@@ -824,6 +877,18 @@ fn math_start_after_container(text: &str, active: Option<ListContainer>) -> Opti
     if virtual_indent + text[offset..].len() - content.len() > 3 {
         return None;
     }
+    Some(ContainerStart {
+        offset,
+        quote_depth: depth + inner_quote_depth,
+        inner_quote_depth,
+        list_context,
+        virtual_indent,
+    })
+}
+
+fn math_start_after_container(text: &str, active: Option<ListContainer>) -> Option<ContainerStart> {
+    let start = start_after_container(text, active)?;
+    let content = text[start.offset..].trim_start_matches(' ');
     let is_math_fence = opening_fence(content).is_some_and(|(_, _, info)| {
         info.split_whitespace().next().is_some_and(|word| {
             ["math", "latex", "tex"]
@@ -831,13 +896,132 @@ fn math_start_after_container(text: &str, active: Option<ListContainer>) -> Opti
                 .any(|language| word.eq_ignore_ascii_case(language))
         })
     });
-    (content.starts_with("$$") || is_math_fence).then_some(MathStart {
-        offset,
-        quote_depth: depth + inner_quote_depth,
-        inner_quote_depth,
-        list_context,
+    (content.starts_with("$$") || is_math_fence).then_some(start)
+}
+
+fn html_start_after_container(
+    text: &str,
+    active: Option<ListContainer>,
+) -> Option<(ContainerStart, crate::html::HtmlStart)> {
+    if !text.contains('<') {
+        return None;
+    }
+    let start = start_after_container(text, active)?;
+    let html = crate::html::block_start(&text[start.offset..])?;
+    Some((start, html))
+}
+
+fn html_interrupts_container(text: &str, active: Option<ListContainer>) -> bool {
+    html_start_after_container(text, active).is_some_and(|(_, html)| {
+        let (prefix, _) = list_outer_quote_prefix(text, active);
+        html.interrupts_paragraph || parse_list_marker(&text[prefix..]).is_some()
+    })
+}
+
+pub(crate) fn may_start_html(text: &str) -> bool {
+    crate::html::block_start(text).is_some() || html_start_after_container(text, None).is_some()
+}
+
+fn container_line<'a>(line: &Line<'a>, first: bool, start: ContainerStart) -> Option<Line<'a>> {
+    let outer_depth = start.quote_depth - start.inner_quote_depth;
+    let (mut prefix, line_depth) = quote_prefix_up_to(line.text, outer_depth);
+    if line_depth != outer_depth {
+        return None;
+    }
+    let mut virtual_indent = 0;
+    if first {
+        prefix = start.offset;
+        virtual_indent = start.virtual_indent;
+    } else if let Some(context) = start.list_context {
+        let (indent, remainder) =
+            strip_container_indent(&line.text[prefix..], context.content_indent as usize).or_else(
+                || {
+                    line.text[prefix..]
+                        .trim()
+                        .is_empty()
+                        .then_some((line.text.len() - prefix, 0))
+                },
+            )?;
+        prefix += indent;
+        virtual_indent = remainder;
+    }
+    if !first && start.inner_quote_depth > 0 {
+        let spaces = line.text[prefix..]
+            .bytes()
+            .take_while(|byte| *byte == b' ')
+            .count();
+        let (quote_bytes, quotes) =
+            quote_prefix_up_to(&line.text[prefix..], start.inner_quote_depth);
+        if quotes != start.inner_quote_depth || virtual_indent + spaces > 3 {
+            return None;
+        }
+        prefix += quote_bytes;
+        virtual_indent = 0;
+    }
+    Some(Line {
+        text: &line.text[prefix..],
+        byte_start: line.byte_start + prefix,
+        byte_end: line.byte_end,
         virtual_indent,
     })
+}
+
+fn container_html(
+    lines: &[Line<'_>],
+    start: usize,
+    source: &str,
+    active: Option<ListContainer>,
+    previous: Option<&BlockNode>,
+) -> Option<(BlockKind, usize)> {
+    let (container, html) = html_start_after_container(lines[start].text, active)?;
+    let (prefix, _) = list_outer_quote_prefix(lines[start].text, active);
+    let new_item = parse_list_marker(&lines[start].text[prefix..]).is_some();
+    if !html.interrupts_paragraph && !new_item && start > 0 {
+        let paragraph_open = previous.is_some_and(|block| {
+            block.line_end == start as u32
+                && matches!(
+                    block.kind,
+                    BlockKind::Paragraph { .. }
+                        | BlockKind::BulletItem { .. }
+                        | BlockKind::NumberedItem { .. }
+                        | BlockKind::Checkbox { .. }
+                        | BlockKind::Blockquote { .. }
+                        | BlockKind::Callout { .. }
+                        | BlockKind::BulletList { .. }
+                        | BlockKind::OrderedList { .. }
+                )
+        });
+        let preceding_content = container_line(&lines[start - 1], false, container).or_else(|| {
+            let preceding = start_after_container(lines[start - 1].text, active)?;
+            (preceding.list_context == container.list_context
+                && preceding.quote_depth == container.quote_depth)
+                .then(|| container_line(&lines[start - 1], true, preceding))
+                .flatten()
+        });
+        if paragraph_open && preceding_content.is_some_and(|line| !line.text.trim().is_empty()) {
+            return None;
+        }
+    }
+    let mut end = start;
+    while let Some(line) = lines
+        .get(end)
+        .and_then(|line| container_line(line, end == start, container))
+    {
+        if matches!(html.end, crate::html::HtmlEnd::Blank)
+            && line.text.trim_matches([' ', '\t']).is_empty()
+        {
+            break;
+        }
+        end += 1;
+        if html.end.closes(line.text) {
+            break;
+        }
+    }
+    if end == start {
+        return None;
+    }
+    let source = source[lines[start].byte_start..lines[end - 1].byte_end].to_owned();
+    Some((BlockKind::RawHtml { source }, end))
 }
 
 fn quoted_math_start(text: &str) -> Option<(usize, u32)> {
@@ -866,60 +1050,23 @@ fn container_math(
     map: &Utf16Map,
     active: Option<ListContainer>,
 ) -> Option<(BlockKind, usize)> {
-    let MathStart {
+    let container = math_start_after_container(lines[start].text, active)?;
+    let ContainerStart {
         offset,
         quote_depth: depth,
-        inner_quote_depth,
         list_context,
         virtual_indent: opening_indent,
-    } = math_start_after_container(lines[start].text, active)?;
+        ..
+    } = container;
     let first = &lines[start].text[offset..];
     let fence = opening_fence(first.trim());
     let mut logical = Vec::new();
     for (index, line) in lines.iter().enumerate().skip(start) {
-        let mut virtual_indent = 0;
-        let outer_depth = depth - inner_quote_depth;
-        let (mut prefix, line_depth) = quote_prefix_up_to(line.text, outer_depth);
-        if line_depth != outer_depth {
+        let Some(line) = container_line(line, index == start, container) else {
             break;
-        }
-        if index == start {
-            prefix = offset;
-            virtual_indent = opening_indent;
-        } else if let Some(context) = list_context {
-            let Some((indent, remainder)) =
-                strip_container_indent(&line.text[prefix..], context.content_indent as usize)
-                    .or_else(|| {
-                        line.text[prefix..]
-                            .trim()
-                            .is_empty()
-                            .then_some((line.text.len() - prefix, 0))
-                    })
-            else {
-                break;
-            };
-            prefix += indent;
-            virtual_indent = remainder;
-        }
-        if index > start && inner_quote_depth > 0 {
-            let spaces = line.text[prefix..]
-                .bytes()
-                .take_while(|byte| *byte == b' ')
-                .count();
-            let (quote_bytes, quotes) = quote_prefix_up_to(&line.text[prefix..], inner_quote_depth);
-            if quotes != inner_quote_depth || virtual_indent + spaces > 3 {
-                break;
-            }
-            prefix += quote_bytes;
-            virtual_indent = 0;
-        }
-        let content = &line.text[prefix..];
-        logical.push(Line {
-            text: content,
-            byte_start: line.byte_start + prefix,
-            byte_end: line.byte_end,
-            virtual_indent,
-        });
+        };
+        let content = line.text;
+        logical.push(line);
         if index == start && fence.is_none() && first.trim() != "$$" {
             break;
         }

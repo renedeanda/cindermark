@@ -78,14 +78,19 @@ expand macros, execute code or load resources.
 
 ## Consumer responsibilities
 
-Top-level HTML blocks follow the seven CommonMark §4.6 start/end categories,
+HTML leaf blocks follow the seven CommonMark §4.6 start/end categories,
 including paragraph interruption, ordinary indentation and blank-line versus
 explicit-terminator boundaries. `RawHtml` retains exact source in the FFI `text`
 field; WASM uses `type: "rawHtml"` and `source`. These blocks have no Markdown
 inline spans, links or math nodes. Preview fallback keeps their source literal.
 The variant is appended after `Math` in the UniFFI wire order. Recognition does
 not authorize HTML execution: consumers must display escaped/plain source.
-HTML inside list/quote containers still requires further implementation.
+Explicitly prefixed blockquotes and list items/continuations use the same bounded
+container projection as math, including quotes inside lists and lists inside
+quotes. Full source retains prefixes and original line endings. Recognition ends
+at the containing boundary; new sibling items are not consumed. A custom complete
+tag cannot interrupt an existing container paragraph. Marker metadata is retained
+when the opening line carries a list marker.
 
 Renderers decide which TeX commands they support and must preserve accessible
 raw-source fallback for unsupported or excessive expressions. Parsing is not
@@ -103,7 +108,7 @@ adding math syntax/content metadata and `tableCells`.
 - Lists remain column-based rather than a complete CommonMark container tree.
   Arbitrarily alternating list/quote containers and lazy quote continuations
   are not covered by a full conformance result.
-- Incremental edits before math conservatively reparse the document because
+- Incremental edits before math or raw HTML conservatively reparse the document because
   a changed ancestor list marker can alter a distant math container. Plain-note
   incremental parsing remains available; container checkpoints are not yet cached.
 - Bare CR line splitting, NUL replacement and HTML container semantics do

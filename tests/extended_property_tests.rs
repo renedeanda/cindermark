@@ -11,6 +11,7 @@ proptest! {
             "x", "`", "**", "[[x]]", "|", "\0", "\t", "{", "}",
             "<!--", "-->", "<?", "?>", "<![CDATA[", "]]>", "<!DOC", ">",
             "<script>", "</script>", "<div>", "<custom-tag>",
+            "- ", "1. ", "- [ ] ", "> ", "  ",
         ]), 0..80),
         inserted in prop::sample::select(vec!["$x$", "++x++", "🍃", "\n\n", "\\"]),
         position in any::<usize>(),

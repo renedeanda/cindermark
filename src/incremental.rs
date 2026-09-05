@@ -246,13 +246,15 @@ fn needs_full_reparse(
     edit_utf16_start: u32,
     edit_new_utf16_len: u32,
 ) -> bool {
-    // A preceding edit can change the list context of a distant math block.
+    // A preceding edit can change the container of distant opaque blocks.
     // Until snapshots carry container checkpoints, reparse that dependency.
     if prev.blocks[first_dirty..]
         .iter()
         .any(|block| match &block.kind {
-            BlockKind::Math { .. } => true,
-            BlockKind::CodeBlock { code, .. } => code.lines().any(parser::may_start_math),
+            BlockKind::Math { .. } | BlockKind::RawHtml { .. } => true,
+            BlockKind::CodeBlock { code, .. } => code
+                .lines()
+                .any(|line| parser::may_start_math(line) || parser::may_start_html(line)),
             _ => false,
         })
     {
@@ -296,7 +298,7 @@ fn needs_full_reparse(
             || line.trim().starts_with("~~~")
             || line.trim().starts_with("$$")
             || parser::may_start_math(line)
-            || crate::html::block_start(line).is_some()
+            || parser::may_start_html(line)
         {
             return true;
         }
