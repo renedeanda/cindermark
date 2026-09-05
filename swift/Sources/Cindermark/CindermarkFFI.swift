@@ -500,6 +500,8 @@ public protocol CindermarkParserProtocol : AnyObject {
     
     func extractWikiLinks(text: String)  -> [String]
     
+    func listItemRanges(text: String)  -> [ListItemRange]
+    
     func parse(text: String)  -> FfiParseResult
     
     func parseEditable(text: String)  -> FfiParseResult
@@ -581,6 +583,14 @@ public convenience init(imageMarkerScheme: String? = nil) {
 open func extractWikiLinks(text: String) -> [String] {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
     uniffi_cindermark_fn_method_cindermarkparser_extract_wiki_links(self.uniffiClonePointer(),
+        FfiConverterString.lower(text),$0
+    )
+})
+}
+    
+open func listItemRanges(text: String) -> [ListItemRange] {
+    return try!  FfiConverterSequenceTypeListItemRange.lift(try! rustCall() {
+    uniffi_cindermark_fn_method_cindermarkparser_list_item_ranges(self.uniffiClonePointer(),
         FfiConverterString.lower(text),$0
     )
 })
@@ -1922,6 +1932,136 @@ public func FfiConverterTypeFfiTableCell_lower(_ value: FfiTableCell) -> RustBuf
     return FfiConverterTypeFfiTableCell.lower(value)
 }
 
+
+public struct ListItemRange {
+    public let byteStart: UInt32
+    public let byteEnd: UInt32
+    public let utf16Start: UInt32
+    public let utf16End: UInt32
+    public let markerUtf16Start: UInt32
+    public let markerUtf16End: UInt32
+    public let indentColumns: UInt32
+    public let parentIndex: UInt32?
+    public let siblingGroup: UInt32
+    public let checked: Bool?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(byteStart: UInt32, byteEnd: UInt32, utf16Start: UInt32, utf16End: UInt32, markerUtf16Start: UInt32, markerUtf16End: UInt32, indentColumns: UInt32, parentIndex: UInt32?, siblingGroup: UInt32, checked: Bool?) {
+        self.byteStart = byteStart
+        self.byteEnd = byteEnd
+        self.utf16Start = utf16Start
+        self.utf16End = utf16End
+        self.markerUtf16Start = markerUtf16Start
+        self.markerUtf16End = markerUtf16End
+        self.indentColumns = indentColumns
+        self.parentIndex = parentIndex
+        self.siblingGroup = siblingGroup
+        self.checked = checked
+    }
+}
+
+
+
+extension ListItemRange: Equatable, Hashable {
+    public static func ==(lhs: ListItemRange, rhs: ListItemRange) -> Bool {
+        if lhs.byteStart != rhs.byteStart {
+            return false
+        }
+        if lhs.byteEnd != rhs.byteEnd {
+            return false
+        }
+        if lhs.utf16Start != rhs.utf16Start {
+            return false
+        }
+        if lhs.utf16End != rhs.utf16End {
+            return false
+        }
+        if lhs.markerUtf16Start != rhs.markerUtf16Start {
+            return false
+        }
+        if lhs.markerUtf16End != rhs.markerUtf16End {
+            return false
+        }
+        if lhs.indentColumns != rhs.indentColumns {
+            return false
+        }
+        if lhs.parentIndex != rhs.parentIndex {
+            return false
+        }
+        if lhs.siblingGroup != rhs.siblingGroup {
+            return false
+        }
+        if lhs.checked != rhs.checked {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(byteStart)
+        hasher.combine(byteEnd)
+        hasher.combine(utf16Start)
+        hasher.combine(utf16End)
+        hasher.combine(markerUtf16Start)
+        hasher.combine(markerUtf16End)
+        hasher.combine(indentColumns)
+        hasher.combine(parentIndex)
+        hasher.combine(siblingGroup)
+        hasher.combine(checked)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeListItemRange: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ListItemRange {
+        return
+            try ListItemRange(
+                byteStart: FfiConverterUInt32.read(from: &buf), 
+                byteEnd: FfiConverterUInt32.read(from: &buf), 
+                utf16Start: FfiConverterUInt32.read(from: &buf), 
+                utf16End: FfiConverterUInt32.read(from: &buf), 
+                markerUtf16Start: FfiConverterUInt32.read(from: &buf), 
+                markerUtf16End: FfiConverterUInt32.read(from: &buf), 
+                indentColumns: FfiConverterUInt32.read(from: &buf), 
+                parentIndex: FfiConverterOptionUInt32.read(from: &buf), 
+                siblingGroup: FfiConverterUInt32.read(from: &buf), 
+                checked: FfiConverterOptionBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ListItemRange, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.byteStart, into: &buf)
+        FfiConverterUInt32.write(value.byteEnd, into: &buf)
+        FfiConverterUInt32.write(value.utf16Start, into: &buf)
+        FfiConverterUInt32.write(value.utf16End, into: &buf)
+        FfiConverterUInt32.write(value.markerUtf16Start, into: &buf)
+        FfiConverterUInt32.write(value.markerUtf16End, into: &buf)
+        FfiConverterUInt32.write(value.indentColumns, into: &buf)
+        FfiConverterOptionUInt32.write(value.parentIndex, into: &buf)
+        FfiConverterUInt32.write(value.siblingGroup, into: &buf)
+        FfiConverterOptionBool.write(value.checked, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeListItemRange_lift(_ buf: RustBuffer) throws -> ListItemRange {
+    return try FfiConverterTypeListItemRange.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeListItemRange_lower(_ value: ListItemRange) -> RustBuffer {
+    return FfiConverterTypeListItemRange.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -2309,6 +2449,54 @@ extension FfiInlineType: Equatable, Hashable {}
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -2558,6 +2746,31 @@ fileprivate struct FfiConverterSequenceTypeFfiTableCell: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeListItemRange: FfiConverterRustBuffer {
+    typealias SwiftType = [ListItemRange]
+
+    public static func write(_ value: [ListItemRange], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeListItemRange.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ListItemRange] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ListItemRange]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeListItemRange.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [[String]]
 
@@ -2596,6 +2809,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.contractVersionMismatch
     }
     if (uniffi_cindermark_checksum_method_cindermarkparser_extract_wiki_links() != 56235) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cindermark_checksum_method_cindermarkparser_list_item_ranges() != 62019) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_cindermark_checksum_method_cindermarkparser_parse() != 5574) {

@@ -32,6 +32,20 @@ inline spans and source ranges. Row zero is the header; row one is the first
 data row. The separator row is structural and has no cells. Escaped pipes do
 not split cells. The existing 20-header-column and 500-data-row limits remain.
 
+`list_item_ranges` (`listItemRanges` in Swift, `listItemRangesJson` in WASM)
+is an on-demand, snapshot-independent query for source edits. Each item reports
+byte/UTF-16 subtree bounds, its marker bounds, tab-expanded indentation, optional
+task state, parent result index and sibling-group identity. Indented continuation
+blocks and descendants belong to the source envelope; trailing blank lines do
+not. Inter-item gaps remain caller-owned source and must not be discarded when
+reordering. Indices are valid only for the queried source, not persistent IDs.
+Sibling groups share a parent, indentation and bullet/ordered delimiter. A
+containing body paragraph ends a nested sibling run. Unindented paragraphs end
+ownership rather than being inferred as lazy continuation. Explicitly quoted
+list markers are not exposed by this query. This preserves the current flat
+parser's column-based list profile without claiming a CommonMark container tree.
+The query parses once on demand; it is not part of incremental/scroll layout.
+
 ## Underline
 
 `++text++` produces `UnderlinePlus`, semantically equivalent to the existing

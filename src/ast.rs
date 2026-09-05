@@ -322,6 +322,22 @@ pub struct ListItem {
     pub inline_spans: Vec<InlineSpan>,
 }
 
+/// Source envelope of an editable list item, including owned continuation blocks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListItemRange {
+    pub byte_start: u32,
+    pub byte_end: u32,
+    pub utf16_start: u32,
+    pub utf16_end: u32,
+    pub marker_utf16_start: u32,
+    pub marker_utf16_end: u32,
+    pub indent_columns: u32,
+    /// Indices address this result only; they are not persistent identities.
+    pub parent_index: Option<u32>,
+    pub sibling_group: u32,
+    pub checked: Option<bool>,
+}
+
 /// An inline formatting span — 28 bytes for cache-friendly traversal.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InlineSpan {

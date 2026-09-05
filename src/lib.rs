@@ -881,6 +881,10 @@ impl CindermarkParser {
         convert_document(&doc, &text)
     }
 
+    pub fn list_item_ranges(&self, text: String) -> Vec<ListItemRange> {
+        parser::list_item_ranges(&text, &self.options)
+    }
+
     /// Full parse in editable mode (for block editor).
     /// Stores a snapshot for subsequent incremental updates.
     pub fn parse_editable(&self, text: String) -> FfiParseResult {

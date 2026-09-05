@@ -98,6 +98,30 @@ impl WasmParser {
     pub fn toggle_checkbox(&self, text: String, line_index: u32) -> String {
         self.inner.toggle_checkbox(text, line_index)
     }
+
+    #[wasm_bindgen(js_name = listItemRangesJson)]
+    pub fn list_item_ranges_json(&self, text: String) -> String {
+        use std::fmt::Write;
+        let items = self.inner.list_item_ranges(text);
+        let mut out = String::from("{\"schema_version\":2,\"items\":[");
+        for (index, item) in items.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            let parent = item
+                .parent_index
+                .map_or_else(|| "null".into(), |value| value.to_string());
+            let checked = item
+                .checked
+                .map_or_else(|| "null".into(), |value| value.to_string());
+            let _ = write!(out, "{{\"byteStart\":{},\"byteEnd\":{},\"utf16Start\":{},\"utf16End\":{},\"markerUtf16Start\":{},\"markerUtf16End\":{},\"indentColumns\":{},\"parentIndex\":{},\"siblingGroup\":{},\"checked\":{}}}",
+                item.byte_start, item.byte_end, item.utf16_start, item.utf16_end,
+                item.marker_utf16_start, item.marker_utf16_end, item.indent_columns,
+                parent, item.sibling_group, checked);
+        }
+        out.push_str("]}");
+        out
+    }
 }
 
 impl Default for WasmParser {
@@ -381,5 +405,13 @@ mod tests {
         assert!(json.contains("\"type\":\"rawHtml\""));
         assert!(json.contains("<script>\\r\\n$$x$$\\r\\n</script>"));
         assert!(!json.contains("\"type\":\"math\""));
+    }
+
+    #[test]
+    fn list_ranges_json_retains_nullable_task_and_parent_identity() {
+        let json = WasmParser::new().list_item_ranges_json("- parent\n  - [x] child\n".into());
+        assert!(json.contains("\"parentIndex\":null,\"siblingGroup\":0,\"checked\":null"));
+        assert!(json.contains("\"parentIndex\":0,\"siblingGroup\":1,\"checked\":true"));
+        assert!(json.contains("\"utf16Start\":9,\"utf16End\":23"));
     }
 }

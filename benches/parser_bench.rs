@@ -228,6 +228,18 @@ criterion_group!(
     bench_extended_syntax,
     bench_container_math,
     bench_container_html,
-    bench_compound_containers
+    bench_compound_containers,
+    bench_list_ranges
 );
 criterion_main!(benches);
+
+fn bench_list_ranges(c: &mut Criterion) {
+    for count in [500, 2500] {
+        let source = (0..count)
+            .map(|i| format!("- [ ] Task {i}\n  - [x] Child\n  continuation\n"))
+            .collect::<String>();
+        c.bench_function(&format!("list_ranges_{count}"), |b| {
+            b.iter(|| cindermark::parser::list_item_ranges(black_box(&source), &Default::default()))
+        });
+    }
+}

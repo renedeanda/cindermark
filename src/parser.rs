@@ -61,6 +61,87 @@ pub fn parse(source: &str, mode: ParseMode) -> Document {
     parse_with_options(source, mode, &ParseOptions::default())
 }
 
+/// On-demand list ownership for source edits, independent of incremental snapshots.
+pub fn list_item_ranges(source: &str, options: &ParseOptions) -> Vec<ListItemRange> {
+    let document = parse_with_options(source, ParseMode::Editable, options);
+    let mut items: Vec<ListItemRange> = Vec::new();
+    let mut marker_kinds = Vec::new();
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    for block in &document.blocks {
+        if matches!(block.kind, BlockKind::Empty) {
+            continue;
+        }
+        let raw = &source[block.byte_start as usize..block.byte_end as usize];
+        let first_line = raw.lines().next().unwrap_or("");
+        let marker = block.list_marker.as_ref().and_then(|meta| {
+            parse_list_marker(first_line)
+                .filter(|marker| {
+                    block.byte_start as usize + marker.marker_start
+                        == meta.marker_byte_start as usize
+                })
+                .map(|marker| (marker, meta))
+        });
+        if let Some((marker, meta)) = marker {
+            let indent = column_width(&first_line[..marker.marker_start]);
+            let mut previous = None;
+            while stack
+                .last()
+                .is_some_and(|&(index, _)| items[index].indent_columns as usize >= indent)
+            {
+                previous = stack.pop().map(|(index, _)| index);
+            }
+            let parent_index = stack.last().map(|&(index, _)| index as u32);
+            let index = items.len();
+            let marker_kind = (marker.unordered_marker, marker.ordered_delimiter);
+            let sibling_group = previous
+                .filter(|&previous| {
+                    items[previous].indent_columns as usize == indent
+                        && items[previous].parent_index == parent_index
+                        && marker_kinds[previous] == marker_kind
+                })
+                .map_or(index as u32, |previous| items[previous].sibling_group);
+            marker_kinds.push(marker_kind);
+            items.push(ListItemRange {
+                byte_start: block.byte_start,
+                byte_end: block.byte_end,
+                utf16_start: block.utf16_start,
+                utf16_end: block.utf16_end,
+                marker_utf16_start: meta.marker_utf16_start,
+                marker_utf16_end: meta.marker_utf16_end,
+                indent_columns: indent as u32,
+                parent_index,
+                sibling_group,
+                checked: match marker.kind {
+                    ParsedListKind::Checkbox(checked) => Some(checked),
+                    _ => None,
+                },
+            });
+            stack.push((
+                index,
+                column_width(&first_line[..marker.container_content_start]),
+            ));
+        } else {
+            let prefix = first_line
+                .bytes()
+                .take_while(|b| matches!(b, b' ' | b'\t'))
+                .count();
+            let indent = column_width(&first_line[..prefix]);
+            while stack
+                .last()
+                .is_some_and(|&(_, content_indent)| indent < content_indent)
+            {
+                stack.pop();
+            }
+        }
+        // Nesting is bounded by the parser's 32-column marker limit.
+        for &(index, _) in &stack {
+            items[index].byte_end = block.byte_end;
+            items[index].utf16_end = block.utf16_end;
+        }
+    }
+    items
+}
+
 /// Parse source text into a `Document` with the given mode and options.
 pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions) -> Document {
     let bytes = source.as_bytes();
