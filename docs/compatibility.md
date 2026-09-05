@@ -1,5 +1,13 @@
 # Compatibility profile (0.3.0 development)
 
+The on-demand `resource_references` query exposes inline link destinations and
+image occurrences with UTF-16 source/label ranges. It shares AST exclusions for
+code, math and raw HTML and does not replace the incremental snapshot. Destinations
+are untrusted, opaque source strings: the host must validate paths, permissions,
+file types and size before loading anything. The query performs no I/O. Reference
+links and normalized destination/title parsing are not implemented; unsupported
+forms must remain source rather than being guessed by a host parser.
+
 Cindermark is oriented toward [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/),
 with GFM-oriented tables, task lists, strikethrough and extended autolinks.
 Wiki links, highlights, comments, callouts, Mermaid, underline and math are

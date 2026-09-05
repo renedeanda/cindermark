@@ -124,6 +124,28 @@ impl WasmParser {
     }
 }
 
+#[wasm_bindgen]
+impl WasmParser {
+    #[wasm_bindgen(js_name = resourceReferencesJson)]
+    pub fn resource_references_json(&self, text: String) -> String {
+        use std::fmt::Write;
+        let references = self.inner.resource_references(text);
+        let mut out = String::from("{\"schema_version\":2,\"references\":[");
+        for (index, reference) in references.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "{{\"utf16Start\":{},\"utf16End\":{},\"labelUtf16Start\":{},\"labelUtf16End\":{},\"isImage\":{},\"destination\":",
+                reference.utf16_start, reference.utf16_end, reference.label_utf16_start,
+                reference.label_utf16_end, reference.is_image);
+            push_json_string(&mut out, &reference.destination);
+            out.push('}');
+        }
+        out.push_str("]}");
+        out
+    }
+}
+
 impl Default for WasmParser {
     fn default() -> Self {
         Self::new()
@@ -413,5 +435,12 @@ mod tests {
         assert!(json.contains("\"parentIndex\":null,\"siblingGroup\":0,\"checked\":null"));
         assert!(json.contains("\"parentIndex\":0,\"siblingGroup\":1,\"checked\":true"));
         assert!(json.contains("\"utf16Start\":9,\"utf16End\":23"));
+    }
+
+    #[test]
+    fn resource_json_preserves_image_identity_and_escapes_destination() {
+        let json = WasmParser::new().resource_references_json("😀 ![x](a\"b.png)".into());
+        assert!(json.contains("\"utf16Start\":3"));
+        assert!(json.contains("\"isImage\":true,\"destination\":\"a\\\"b.png\""));
     }
 }

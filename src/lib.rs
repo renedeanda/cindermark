@@ -18,7 +18,10 @@ pub mod incremental;
 pub mod inline;
 pub mod lexer;
 pub mod parser;
+pub mod resources;
 pub mod utf16;
+
+pub use resources::ResourceReference;
 
 use ast::*;
 use std::sync::Mutex;
@@ -883,6 +886,10 @@ impl CindermarkParser {
 
     pub fn list_item_ranges(&self, text: String) -> Vec<ListItemRange> {
         parser::list_item_ranges(&text, &self.options)
+    }
+
+    pub fn resource_references(&self, text: String) -> Vec<ResourceReference> {
+        resources::resource_references(&text, &self.options)
     }
 
     /// Full parse in editable mode (for block editor).

@@ -229,7 +229,8 @@ criterion_group!(
     bench_container_math,
     bench_container_html,
     bench_compound_containers,
-    bench_list_ranges
+    bench_list_ranges,
+    bench_resource_references
 );
 criterion_main!(benches);
 
@@ -240,6 +241,19 @@ fn bench_list_ranges(c: &mut Criterion) {
             .collect::<String>();
         c.bench_function(&format!("list_ranges_{count}"), |b| {
             b.iter(|| cindermark::parser::list_item_ranges(black_box(&source), &Default::default()))
+        });
+    }
+}
+
+fn bench_resource_references(c: &mut Criterion) {
+    for count in [500, 2500] {
+        let source = (0..count)
+            .map(|i| format!("- ![Photo {i}](Attachments/photo-{i}.png)\r\n"))
+            .collect::<String>();
+        c.bench_function(&format!("resource_references_{count}"), |b| {
+            b.iter(|| {
+                cindermark::resources::resource_references(black_box(&source), &Default::default())
+            })
         });
     }
 }

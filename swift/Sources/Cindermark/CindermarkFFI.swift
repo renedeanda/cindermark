@@ -518,6 +518,8 @@ public protocol CindermarkParserProtocol : AnyObject {
     
     func resetState() 
     
+    func resourceReferences(text: String)  -> [ResourceReference]
+    
     func toggleCheckbox(text: String, lineIndex: UInt32)  -> String
     
 }
@@ -667,6 +669,14 @@ open func resetState() {try! rustCall() {
     uniffi_cindermark_fn_method_cindermarkparser_reset_state(self.uniffiClonePointer(),$0
     )
 }
+}
+    
+open func resourceReferences(text: String) -> [ResourceReference] {
+    return try!  FfiConverterSequenceTypeResourceReference.lift(try! rustCall() {
+    uniffi_cindermark_fn_method_cindermarkparser_resource_references(self.uniffiClonePointer(),
+        FfiConverterString.lower(text),$0
+    )
+})
 }
     
 open func toggleCheckbox(text: String, lineIndex: UInt32) -> String {
@@ -2062,6 +2072,104 @@ public func FfiConverterTypeListItemRange_lower(_ value: ListItemRange) -> RustB
     return FfiConverterTypeListItemRange.lower(value)
 }
 
+
+public struct ResourceReference {
+    public let utf16Start: UInt32
+    public let utf16End: UInt32
+    public let labelUtf16Start: UInt32
+    public let labelUtf16End: UInt32
+    public let destination: String
+    public let isImage: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(utf16Start: UInt32, utf16End: UInt32, labelUtf16Start: UInt32, labelUtf16End: UInt32, destination: String, isImage: Bool) {
+        self.utf16Start = utf16Start
+        self.utf16End = utf16End
+        self.labelUtf16Start = labelUtf16Start
+        self.labelUtf16End = labelUtf16End
+        self.destination = destination
+        self.isImage = isImage
+    }
+}
+
+
+
+extension ResourceReference: Equatable, Hashable {
+    public static func ==(lhs: ResourceReference, rhs: ResourceReference) -> Bool {
+        if lhs.utf16Start != rhs.utf16Start {
+            return false
+        }
+        if lhs.utf16End != rhs.utf16End {
+            return false
+        }
+        if lhs.labelUtf16Start != rhs.labelUtf16Start {
+            return false
+        }
+        if lhs.labelUtf16End != rhs.labelUtf16End {
+            return false
+        }
+        if lhs.destination != rhs.destination {
+            return false
+        }
+        if lhs.isImage != rhs.isImage {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(utf16Start)
+        hasher.combine(utf16End)
+        hasher.combine(labelUtf16Start)
+        hasher.combine(labelUtf16End)
+        hasher.combine(destination)
+        hasher.combine(isImage)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeResourceReference: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ResourceReference {
+        return
+            try ResourceReference(
+                utf16Start: FfiConverterUInt32.read(from: &buf), 
+                utf16End: FfiConverterUInt32.read(from: &buf), 
+                labelUtf16Start: FfiConverterUInt32.read(from: &buf), 
+                labelUtf16End: FfiConverterUInt32.read(from: &buf), 
+                destination: FfiConverterString.read(from: &buf), 
+                isImage: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ResourceReference, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.utf16Start, into: &buf)
+        FfiConverterUInt32.write(value.utf16End, into: &buf)
+        FfiConverterUInt32.write(value.labelUtf16Start, into: &buf)
+        FfiConverterUInt32.write(value.labelUtf16End, into: &buf)
+        FfiConverterString.write(value.destination, into: &buf)
+        FfiConverterBool.write(value.isImage, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeResourceReference_lift(_ buf: RustBuffer) throws -> ResourceReference {
+    return try FfiConverterTypeResourceReference.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeResourceReference_lower(_ value: ResourceReference) -> RustBuffer {
+    return FfiConverterTypeResourceReference.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -2771,6 +2879,31 @@ fileprivate struct FfiConverterSequenceTypeListItemRange: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeResourceReference: FfiConverterRustBuffer {
+    typealias SwiftType = [ResourceReference]
+
+    public static func write(_ value: [ResourceReference], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeResourceReference.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ResourceReference] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ResourceReference]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeResourceReference.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [[String]]
 
@@ -2836,6 +2969,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_cindermark_checksum_method_cindermarkparser_reset_state() != 18608) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cindermark_checksum_method_cindermarkparser_resource_references() != 14802) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_cindermark_checksum_method_cindermarkparser_toggle_checkbox() != 24460) {

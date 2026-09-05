@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- On-demand inline resource references with exact UTF-16 source/label ranges,
+  raw destinations and image identity through Rust, UniFFI and WASM.
 - On-demand list subtree source ranges, parent/sibling identities and task state
   through Rust, UniFFI and WASM, without replacing incremental snapshots.
 - Bounded repeated list/quote projection for math and raw HTML, including

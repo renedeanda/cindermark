@@ -81,6 +81,15 @@ dictionary ListItemRange {
     boolean? checked;
 };
 
+dictionary ResourceReference {
+    u32 utf16_start;
+    u32 utf16_end;
+    u32 label_utf16_start;
+    u32 label_utf16_end;
+    string destination;
+    boolean is_image;
+};
+
 dictionary FfiBlock {
     sequence<FfiTableCell> table_cells;
     FfiBlockType block_type;
@@ -184,6 +193,7 @@ interface CindermarkParser {
     FfiParseResult parse(string text);
     FfiParseResult parse_editable(string text);
     sequence<ListItemRange> list_item_ranges(string text);
+    sequence<ResourceReference> resource_references(string text);
     FfiIncrementalResult parse_editable_incremental(string text, u32 edit_utf16_start, u32 edit_old_utf16_len, u32 edit_new_utf16_len);
     FfiIncrementalStyleResult parse_editable_incremental_style_only(string text, u32 edit_utf16_start, u32 edit_old_utf16_len, u32 edit_new_utf16_len);
     void reset_state();
