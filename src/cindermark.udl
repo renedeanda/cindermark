@@ -27,6 +27,7 @@ interface FfiBlockType {
     // 21=Kanban, 22=Radar). Source is carried in the block's `text` field.
     MermaidDiagram(u8 diagram_type);
     Math(u8 syntax, u32 quote_depth, u8 list_kind, u32 list_content_indent, u32 content_utf16_start, u32 content_utf16_end);
+    RawHtml();
 };
 
 [Enum]

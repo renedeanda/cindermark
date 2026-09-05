@@ -43,8 +43,7 @@ backslash run escapes a delimiter; even runs leave it available.
 Code, comments, autolinks, link destinations and HTML attributes are opaque.
 Delimited inline HTML comments, processing instructions, declarations and CDATA
 also protect their contents from plus underline and math. Unclosed inline forms
-do not hide subsequent extensions. This is distinct from HTML block handling,
-which remains an outstanding conformance gate below.
+do not hide subsequent extensions. HTML block boundaries are described below.
 Link labels and table cells expose the new syntax. Math expressions do not
 expose underline or other Markdown spans. Nested emphasis is supported.
 
@@ -79,6 +78,15 @@ expand macros, execute code or load resources.
 
 ## Consumer responsibilities
 
+Top-level HTML blocks follow the seven CommonMark §4.6 start/end categories,
+including paragraph interruption, ordinary indentation and blank-line versus
+explicit-terminator boundaries. `RawHtml` retains exact source in the FFI `text`
+field; WASM uses `type: "rawHtml"` and `source`. These blocks have no Markdown
+inline spans, links or math nodes. Preview fallback keeps their source literal.
+The variant is appended after `Math` in the UniFFI wire order. Recognition does
+not authorize HTML execution: consumers must display escaped/plain source.
+HTML inside list/quote containers still requires further implementation.
+
 Renderers decide which TeX commands they support and must preserve accessible
 raw-source fallback for unsupported or excessive expressions. Parsing is not
 HTML sanitization: HTML exporters must escape text and attributes, validate
@@ -98,7 +106,7 @@ adding math syntax/content metadata and `tableCells`.
 - Incremental edits before math conservatively reparse the document because
   a changed ancestor list marker can alter a distant math container. Plain-note
   incremental parsing remains available; container checkpoints are not yet cached.
-- Bare CR line splitting, NUL replacement and general HTML-block semantics do
+- Bare CR line splitting, NUL replacement and HTML container semantics do
   not yet constitute CommonMark conformance.
 - Previews preserve readable math delimiters and opaque expressions; display
   forms use a dollar-block fallback. Preview text is derived, not lossless

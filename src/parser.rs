@@ -189,6 +189,32 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             continue;
         }
 
+        if let Some(html) = crate::html::block_start(line.text) {
+            let start_line = i;
+            while i < lines.len() {
+                if matches!(html.end, crate::html::HtmlEnd::Blank)
+                    && lines[i].text.trim_matches([' ', '\t']).is_empty()
+                {
+                    break;
+                }
+                let closes = html.end.closes(lines[i].text);
+                i += 1;
+                if closes {
+                    break;
+                }
+            }
+            let source = source[lines[start_line].byte_start..lines[i - 1].byte_end].to_owned();
+            blocks.push(make_block(
+                BlockKind::RawHtml { source },
+                &lines,
+                start_line,
+                i,
+                bytes,
+                &utf16_map,
+            ));
+            continue;
+        }
+
         if let Some((expression, content_start, content_end, end_line)) = dollar_math(&lines, i) {
             blocks.push(make_block(
                 BlockKind::Math {
@@ -569,6 +595,7 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             let pl = lines[i].text;
             let pt = pl.trim();
             if pt.is_empty()
+                || crate::html::block_start(pl).is_some_and(|html| html.interrupts_paragraph)
                 || opening_fence(pt).is_some()
                 || (i > start_line && pt.starts_with("$$"))
                 || (i > start_line

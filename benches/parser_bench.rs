@@ -125,6 +125,13 @@ fn bench_extended_syntax(c: &mut Criterion) {
         ),
         ("unmatched_delimiters_1mb", "\\++ $ +++ ".repeat(100_000)),
         (
+            "raw_html_1mb",
+            format!(
+                "<script>\n{}\n</script>",
+                "$$x$$ ++hidden++ ".repeat(65_000)
+            ),
+        ),
+        (
             "unclosed_inline_html_1mb",
             format!(
                 "prefix {} ++shown++ $y$",

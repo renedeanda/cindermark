@@ -266,6 +266,7 @@ fn needs_full_reparse(
             block.kind,
             BlockKind::CodeBlock { .. }
                 | BlockKind::Math { .. }
+                | BlockKind::RawHtml { .. }
                 | BlockKind::MermaidDiagram { .. }
                 | BlockKind::Table { .. }
         ) {
@@ -295,6 +296,7 @@ fn needs_full_reparse(
             || line.trim().starts_with("~~~")
             || line.trim().starts_with("$$")
             || parser::may_start_math(line)
+            || crate::html::block_start(line).is_some()
         {
             return true;
         }

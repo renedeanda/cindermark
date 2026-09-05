@@ -15,6 +15,7 @@ pub fn parse_inline_spans(blocks: &mut [BlockNode], source: &[u8], utf16_map: &U
         }
         match &block.kind {
             BlockKind::CodeBlock { .. }
+            | BlockKind::RawHtml { .. }
             | BlockKind::Math { .. }
             | BlockKind::MermaidDiagram { .. }
             | BlockKind::HorizontalRule

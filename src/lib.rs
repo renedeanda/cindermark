@@ -13,6 +13,7 @@
 #![allow(clippy::empty_line_after_doc_comments)] // UniFFI 0.28 generated scaffolding.
 
 pub mod ast;
+mod html;
 pub mod incremental;
 pub mod inline;
 pub mod lexer;
@@ -57,6 +58,8 @@ pub enum FfiBlockType {
         content_utf16_start: u32,
         content_utf16_end: u32,
     },
+    /// Opaque source is carried in `FfiBlock.text`; consumers must escape it.
+    RawHtml,
 }
 
 /// Inline type enum for FFI.
@@ -297,6 +300,18 @@ fn convert_block(block: &BlockNode) -> FfiBlock {
             list_context.is_some_and(|context| context.kind == 4),
             info_string.clone(),
             expression.clone(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ),
+        BlockKind::RawHtml { source } => (
+            FfiBlockType::RawHtml,
+            0,
+            0,
+            false,
+            None,
+            source.clone(),
             vec![],
             vec![],
             vec![],
@@ -748,7 +763,10 @@ fn extract_wiki_links_from_doc(doc: &Document, source: &str) -> Vec<String> {
         // in either is source content, not a real link.
         if matches!(
             block.kind,
-            BlockKind::CodeBlock { .. } | BlockKind::MermaidDiagram { .. } | BlockKind::Math { .. }
+            BlockKind::CodeBlock { .. }
+                | BlockKind::MermaidDiagram { .. }
+                | BlockKind::Math { .. }
+                | BlockKind::RawHtml { .. }
         ) {
             continue;
         }
@@ -1135,6 +1153,7 @@ fn build_clean_preview(
 fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<CleanPreview> {
     let mut raw_parts: Vec<String> = Vec::new();
     let mut math_parts = std::collections::HashMap::new();
+    let mut raw_parts_indices = std::collections::HashSet::new();
     let mut approx_len: usize = 0;
 
     for block in &doc.blocks {
@@ -1143,6 +1162,11 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
         }
 
         match &block.kind {
+            BlockKind::RawHtml { source } => {
+                raw_parts_indices.insert(raw_parts.len());
+                approx_len += source.len();
+                raw_parts.push(source.clone());
+            }
             BlockKind::Math { expression, .. } => {
                 math_parts.insert(raw_parts.len(), expression.clone());
                 let text = format!("$$\n{expression}\n$$");
@@ -1225,7 +1249,7 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
                 content_utf16_start: start,
                 content_utf16_end: end,
             });
-        } else {
+        } else if !raw_parts_indices.contains(&index) {
             inline_spans.extend(inline::parse_spans(
                 part.as_bytes(),
                 byte_offset,

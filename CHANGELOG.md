@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opaque top-level HTML blocks with exact source, appended UniFFI `RawHtml`,
+  WASM transport and literal preview fallback.
 - 0.3.0 development: plus-delimited underline and opaque inline/display/fenced
   math, UTF-16 table-cell spans, and WASM schema version 2 metadata.
 - Source-range, malformed-input, Unicode and incremental-edit regression tests.

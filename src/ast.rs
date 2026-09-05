@@ -146,6 +146,10 @@ pub enum BlockKind {
         number: u32,
         text: String,
     },
+    /// Exact opaque source, including original line endings; never executable output.
+    RawHtml {
+        source: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

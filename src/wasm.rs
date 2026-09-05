@@ -115,6 +115,10 @@ fn push_blocks(out: &mut String, blocks: &[FfiBlock]) {
         out.push_str(block_type_name(&block.block_type));
         out.push('"');
         match &block.block_type {
+            FfiBlockType::RawHtml => {
+                out.push_str(",\"source\":");
+                push_json_string(out, &block.text);
+            }
             FfiBlockType::Math {
                 syntax,
                 quote_depth,
@@ -259,6 +263,7 @@ fn block_type_name(block_type: &FfiBlockType) -> &'static str {
         FfiBlockType::Callout { .. } => "callout",
         FfiBlockType::MermaidDiagram { .. } => "mermaid",
         FfiBlockType::Math { .. } => "math",
+        FfiBlockType::RawHtml => "rawHtml",
     }
 }
 
@@ -368,5 +373,13 @@ mod tests {
         assert!(json.contains("\"expression\":\"\\\\alpha\""));
         let quoted = parser.parse_json("> $$x$$".into());
         assert!(quoted.contains("\"quoteDepth\":1"));
+    }
+
+    #[test]
+    fn raw_html_json_preserves_source_without_math_spans() {
+        let json = WasmParser::new().parse_json("<script>\r\n$$x$$\r\n</script>".into());
+        assert!(json.contains("\"type\":\"rawHtml\""));
+        assert!(json.contains("<script>\\r\\n$$x$$\\r\\n</script>"));
+        assert!(!json.contains("\"type\":\"math\""));
     }
 }
