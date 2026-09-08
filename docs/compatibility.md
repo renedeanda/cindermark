@@ -129,7 +129,8 @@ link schemes and never evaluate source as HTML, JavaScript or TeX macros.
 consumer source updates and regenerated bindings from the same revision.
 Existing UniFFI variant order is retained and new variants are appended.
 WASM full-parse JSON declares `schema_version: 2`, retaining existing keys and
-adding math syntax/content metadata and `tableCells`.
+adding math syntax/content metadata, `tableCells` and `tableAlignments`.
+Alignment values are 0 default, 1 left, 2 center and 3 right.
 
 ## Known deviations and outstanding development gates
 
@@ -145,8 +146,8 @@ adding math syntax/content metadata and `tableCells`.
 - Previews preserve readable math delimiters and opaque expressions; display
   forms use a dollar-block fallback. Preview text is derived, not lossless
   source serialization. Formatting does not pair across separate block parts.
-- Current compatibility fixtures are original test inputs, not an authenticated
-  Apple Notes export bundle. Real export-package compatibility remains a gate.
+- Compatibility fixtures are original synthetic inputs. Export-package access,
+  attachment loading and persistence require separate consumer integration tests.
 
 Upstream fixture text is not vendored by this change. A future conformance
 harness must preserve the upstream specification's attribution and license.

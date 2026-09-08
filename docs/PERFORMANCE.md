@@ -24,9 +24,12 @@ cargo bench
 Numbers below are from x86_64 Linux and Apple Silicon (M-series);
 relative deltas are what matter.
 
-## Current numbers
+## Historical 0.2 baseline
 
-<!-- Updated by perf commits; see git history for per-change deltas. -->
+These measurements predate 0.3's math, HTML and source-query additions. They are
+not representative of every document: edits preceding math or opaque HTML can
+require a full parse. Run the added extension and source-query benchmarks for
+your workload; query timings include parsing and are not per-frame costs.
 
 | Benchmark | x86_64 Linux | Apple Silicon | vs. pre-clone-elimination (Linux) |
 |---|---|---|---|

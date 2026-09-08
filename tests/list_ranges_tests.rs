@@ -96,7 +96,7 @@ fn large_list_ranges_remain_nested_and_complete() {
         .collect::<String>();
     let items = ranges(&source);
     assert_eq!(items.len(), 20_000);
-    for pair in items.chunks_exact(2) {
+    for pair in items.as_chunks::<2>().0 {
         assert_eq!(pair[0].byte_end, pair[1].byte_end);
         assert_eq!(pair[0].sibling_group, 0);
     }

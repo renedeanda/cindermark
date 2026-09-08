@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conformance from the CommonMark baseline.
 
 ### Fixed
+- Default Rust builds no longer compile UniFFI as an unconditional build dependency.
+- Enabled UniFFI scaffolding generation now reports failures instead of ignoring them.
 - Inline HTML comments, processing instructions, declarations and CDATA no longer
   expose plus underline or dollar math; repeated unclosed forms use bounded scans.
 - Preview formatting no longer pairs across separate blocks; math keeps readable

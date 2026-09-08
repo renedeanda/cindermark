@@ -21,25 +21,16 @@ crate-type = ["staticlib", "cdylib", "lib"]
 name = "cindermark"
 
 [features]
-# Pure-Rust parser by default. `cargo add cindermark` pulls exactly three
-# crates — memchr, rustc-hash, unicode-segmentation — and no build-script
-# codegen. Everything UniFFI-related is opt-in below.
+# Pure Rust by default; bindings and code generation are opt-in.
 default = []
-# `ffi`: UniFFI scaffolding for the generated Swift / Apple bindings. Enabled
-# automatically by build-apple.sh and the release workflow; Rust-only
-# consumers never need it.
+# Apple bindings and scaffolding.
 ffi = ["dep:uniffi"]
-# `bindgen`: the `uniffi-bindgen` CLI that (re)generates the Swift bindings
-# from cindermark.udl. Only the bundled `uniffi-bindgen` binary requires it,
-# so the CLI toolchain (clap, goblin, …) never reaches a library consumer's
-# dependency graph.
+# Keep the binding-generator CLI out of library consumers' dependency trees.
 bindgen = ["ffi", "uniffi/cli"]
 # `wasm`: wasm-bindgen surface for the browser demo (independent of `ffi`).
 wasm = ["dep:wasm-bindgen"]
 
 [dependencies]
-# Optional and off by default — pulled in only by the `ffi` feature. The `cli`
-# machinery lives behind `bindgen` (see above), keeping consumer builds lean.
 uniffi = { version = "0.28", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 memchr = "2"
@@ -51,28 +42,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
 
 [build-dependencies]
-uniffi = { version = "0.28", features = ["build"] }
+uniffi = { version = "0.28", features = ["build"], optional = true }
 
 [profile.release]
-# Production-grade tuning — this profile is what ships inside host apps
-# (e.g. Ember Notes' App Store builds). Cargo's default release profile is
-# opt-level=3 / codegen-units=16 / no LTO. These overrides take the parser
-# the rest of the way:
-#   - lto = "fat":           full link-time optimization across crates. ~10-20%
-#                            runtime win on tight parser hot loops; produces a
-#                            single inlined .a, smaller and faster.
-#   - codegen-units = 1:     single codegen unit. Slower archive (~30s → ~2-3min
-#                            for parser slice), tighter optimization, smaller
-#                            binary. Acceptable since archives are infrequent.
-#   - strip = true:          drop debug symbols. ~50% smaller .a (27 MB → ~12 MB),
-#                            keeps the app binary slim. Crash logs lose Rust
-#                            frame symbols; disable if you symbolicate them.
-#   - panic = "unwind":      DELIBERATELY kept as the default. Skipping
-#                            `panic = "abort"` preserves UniFFI's contract for
-#                            converting Rust panics into Swift errors via
-#                            `FfiConverterRustBuffer`. `abort` would terminate
-#                            the host app on any parser panic instead of
-#                            surfacing a recoverable Swift throw.
+# Retain panic unwinding for UniFFI's panic boundary.
 lto = "fat"
 codegen-units = 1
 strip = true
@@ -81,10 +54,7 @@ strip = true
 inherits = "release"
 debug = 1
 incremental = true
-# Opt the local-dev profile OUT of the heavy release tuning so iterative
-# `./build-apple.sh dev` rebuilds stay snappy. Without these overrides, the
-# inheritance from `release` would also drag in LTO + codegen-units = 1
-# and turn every local parser change into a 2-3 minute wait.
+# Favor rebuild latency during local development.
 lto = false
 codegen-units = 16
 strip = false

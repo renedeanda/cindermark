@@ -228,6 +228,13 @@ fn push_blocks(out: &mut String, blocks: &[FfiBlock]) {
         push_u32(out, block.list_indent);
         out.push_str(",\"spans\":[");
         push_spans(out, &block.inline_spans);
+        out.push_str("],\"tableAlignments\":[");
+        for (index, alignment) in block.table_alignments.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            push_u32(out, u32::from(*alignment));
+        }
         out.push_str("],\"tableCells\":[");
         for (index, cell) in block.table_cells.iter().enumerate() {
             if index > 0 {
@@ -415,10 +422,13 @@ mod tests {
         assert!(json.contains("\"syntax\":\"dollars\""));
         assert!(json.contains("\"expression\":\"x\""));
         assert!(json.contains("\"tableCells\":[{\"row\":0,\"column\":0"));
+        assert!(json.contains("\"tableAlignments\":[0,0]"));
         assert!(json.contains("\"syntax\":\"plus\""));
         assert!(json.contains("\"expression\":\"\\\\alpha\""));
         let quoted = parser.parse_json("> $$x$$".into());
         assert!(quoted.contains("\"quoteDepth\":1"));
+        let aligned = parser.parse_json("| a | b | c | d |\n| --- | :--- | :---: | ---: |".into());
+        assert!(aligned.contains("\"tableAlignments\":[0,1,2,3]"));
     }
 
     #[test]

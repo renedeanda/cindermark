@@ -49,9 +49,8 @@ pub struct ParseOptions {
     /// literal text between `![](` and the UUID, including any trailing
     /// colon — e.g. Ember Notes passes `"ember:"`.
     ///
-    /// `None` (the default) disables the extension entirely: marker-shaped
-    /// lines fall through to the regular paragraph path, which is the
-    /// CommonMark-clean behavior.
+    /// `None` (the default) disables host-specific attachment markers;
+    /// marker-shaped lines follow ordinary Markdown parsing.
     pub image_marker_scheme: Option<String>,
 }
 

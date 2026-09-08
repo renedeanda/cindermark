@@ -31,6 +31,8 @@ pub struct BlockNode {
     pub table_cells: Vec<TableCell>,
 }
 
+/// A trimmed table cell with absolute UTF-16 ranges and inline spans.
+/// Row zero is the header; the separator has no cells. Columns are zero-based.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableCell {
     pub row: u32,
@@ -338,7 +340,7 @@ pub struct ListItemRange {
     pub checked: Option<bool>,
 }
 
-/// An inline formatting span — 28 bytes for cache-friendly traversal.
+/// An inline formatting span with absolute UTF-16 source and content ranges.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InlineSpan {
     pub kind: InlineKind,

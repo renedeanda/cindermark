@@ -1,6 +1,8 @@
 use crate::ast::{BlockKind, InlineKind, InlineSpan, ParseMode};
 use crate::parser::{parse_with_options, ParseOptions};
 
+/// A source occurrence, not a resolved resource. Destinations are untrusted;
+/// this query performs no I/O. All ranges are absolute UTF-16, end-exclusive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceReference {
     pub utf16_start: u32,
