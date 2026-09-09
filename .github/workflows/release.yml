@@ -1,25 +1,22 @@
-name: Release (Apple XCFramework)
+name: Prepare release (Apple XCFramework)
 
-# MANUAL DISPATCH ONLY. This workflow runs on a macOS runner, which costs
-# money (~$0.16/min). It is never triggered automatically — a maintainer
-# dispatches it to cut a release:
-#
-#   1. Builds libcindermark.a for all 5 Apple targets.
-#   2. Assembles CindermarkFFI.xcframework (device / sim-universal /
-#      macos-universal slices + generated FFI header/modulemap).
-#   3. Patches Package.swift with the release URL + computed checksum.
-#   4. Commits, tags vX.Y.Z, and creates the GitHub release with the
-#      zipped XCFramework attached — so the tag SwiftPM resolves always
-#      has a valid binary target.
+# Paid macOS runner; prepares artifacts and a metadata branch, never tags.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. 0.2.0 — no leading v)"
+        description: "Release version (e.g. 0.3.0 — no leading v)"
         required: true
 
 permissions:
   contents: write
+
+concurrency:
+  group: apple-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_VERSION: ${{ inputs.version }}
 
 jobs:
   release:
@@ -29,20 +26,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          ! git rev-parse --verify "refs/tags/v$RELEASE_VERSION" >/dev/null 2>&1
+          EXISTING=$(git ls-remote --heads origin "refs/heads/release/v$RELEASE_VERSION")
+          test -z "$EXISTING"
+
       - name: Install Rust with Apple targets
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios,aarch64-apple-darwin,x86_64-apple-darwin
 
+      - name: Verify package and tests
+        run: |
+          set -euo pipefail
+          VERSION=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          test "$VERSION" = "$RELEASE_VERSION"
+          cargo fmt --check
+          cargo test --locked
+          cargo test --locked --features ffi
+          cargo clippy --locked --all-targets --features bindgen -- -D warnings
+
       - name: Build all Apple slices
         run: |
           for target in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin; do
-            cargo build --release --features ffi --target "$target"
+            cargo build --locked --release --features ffi --target "$target"
           done
 
       - name: Generate Swift bindings
         run: |
-          cargo run --features bindgen --bin uniffi-bindgen generate src/cindermark.udl \
+          cargo run --locked --features bindgen --bin uniffi-bindgen generate src/cindermark.udl \
             --language swift --no-format --out-dir out/bindings
           mkdir -p out/headers
           cp out/bindings/CindermarkFFIFFI.h out/headers/
@@ -52,7 +69,6 @@ jobs:
               export *
           }
           EOF
-          # Keep the committed SPM source target in sync
           cp out/bindings/CindermarkFFI.swift swift/Sources/Cindermark/CindermarkFFI.swift
 
       - name: Lipo universal slices
@@ -78,22 +94,43 @@ jobs:
 
       - name: Patch Package.swift with URL + checksum
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="$RELEASE_VERSION"
           CHECKSUM=$(swift package compute-checksum out/CindermarkFFI.xcframework.zip)
           sed -i '' -E "s|url: \"https://github.com/renedeanda/cindermark/releases/download/v[^\"]+\"|url: \"https://github.com/renedeanda/cindermark/releases/download/v${VERSION}/CindermarkFFI.xcframework.zip\"|" Package.swift
           sed -i '' -E "s|checksum: \"[a-f0-9]+\"|checksum: \"${CHECKSUM}\"|" Package.swift
 
-      - name: Commit, tag, release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Record provenance
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          artifact = pathlib.Path("out/CindermarkFFI.xcframework.zip")
+          record = {
+              "version": os.environ["RELEASE_VERSION"],
+              "source_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+              "rustc": subprocess.check_output(["rustc", "-Vv"], text=True),
+              "workflow_run": os.environ["GITHUB_RUN_ID"],
+          }
+          pathlib.Path("out/provenance.json").write_text(json.dumps(record, indent=2) + "\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cindermark-${{ inputs.version }}-apple
+          path: |
+            out/CindermarkFFI.xcframework.zip
+            out/provenance.json
+          retention-days: 30
+
+      - name: Prepare release metadata branch
+        run: |
+          set -euo pipefail
+          VERSION="$RELEASE_VERSION"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "release/v$VERSION"
           git add Package.swift swift/Sources/Cindermark/CindermarkFFI.swift
-          git commit -m "Release v${VERSION}: patch Package.swift binary target" || echo "Nothing to commit"
-          git tag "v${VERSION}"
-          git push origin HEAD "v${VERSION}"
-          gh release create "v${VERSION}" out/CindermarkFFI.xcframework.zip \
-            --title "v${VERSION}" \
-            --notes "Cindermark v${VERSION}. See CHANGELOG.md."
+          git commit -m "Prepare v${VERSION} SwiftPM artifact metadata"
+          git push origin "HEAD:refs/heads/release/v$VERSION"
+          echo "Open and review https://github.com/$GITHUB_REPOSITORY/compare/main...release/v$VERSION before publication." >> "$GITHUB_STEP_SUMMARY"
+          echo "Artifacts and provenance are attached to this run. Follow docs/RELEASING.md; no tag or release was published." >> "$GITHUB_STEP_SUMMARY"

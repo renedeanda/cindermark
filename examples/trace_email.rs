@@ -3,12 +3,12 @@ use cindermark::parser::parse;
 
 fn main() {
     let cases = [
-        ("bare email .com", "hello foo@bar.com world"),
-        ("bare email .org", "contact rene@emberful.org today"),
+        ("bare email .com", "hello reader@example.com world"),
+        ("bare email .org", "contact reader@example.org today"),
         ("bare email .net", "email test@example.net end"),
-        ("bare url .com", "visit google.com today"),
-        ("bare email no space", "foo@bar.com"),
-        ("email in list", "- email rene@embernotes.app"),
+        ("bare url .com", "visit example.com today"),
+        ("bare email no space", "reader@example.com"),
+        ("email in list", "- email reader@example.org"),
     ];
     for (name, input) in cases {
         let doc = parse(input, ParseMode::Editable);

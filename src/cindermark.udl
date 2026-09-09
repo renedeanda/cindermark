@@ -26,6 +26,8 @@ interface FfiBlockType {
     // 15=Quadrant, 16=Sankey, 17=XYChart, 18=Block, 19=Packet, 20=Architecture,
     // 21=Kanban, 22=Radar). Source is carried in the block's `text` field.
     MermaidDiagram(u8 diagram_type);
+    Math(u8 syntax, u32 quote_depth, u8 list_kind, u32 list_content_indent, u32 content_utf16_start, u32 content_utf16_end);
+    RawHtml();
 };
 
 [Enum]
@@ -49,6 +51,8 @@ interface FfiInlineType {
     Comment();
     // Inline hex color literal. `hex` is normalized 6-digit lowercase.
     HexColor(string hex);
+    UnderlinePlus();
+    Math(string expression);
 };
 
 dictionary FfiInlineSpan {
@@ -64,7 +68,30 @@ dictionary FfiListItem {
     sequence<FfiInlineSpan> inline_spans;
 };
 
+dictionary ListItemRange {
+    u32 byte_start;
+    u32 byte_end;
+    u32 utf16_start;
+    u32 utf16_end;
+    u32 marker_utf16_start;
+    u32 marker_utf16_end;
+    u32 indent_columns;
+    u32? parent_index;
+    u32 sibling_group;
+    boolean? checked;
+};
+
+dictionary ResourceReference {
+    u32 utf16_start;
+    u32 utf16_end;
+    u32 label_utf16_start;
+    u32 label_utf16_end;
+    string destination;
+    boolean is_image;
+};
+
 dictionary FfiBlock {
+    sequence<FfiTableCell> table_cells;
     FfiBlockType block_type;
     u32 line_start;
     u32 line_end;
@@ -87,6 +114,14 @@ dictionary FfiBlock {
     sequence<string> table_headers;
     sequence<sequence<string>> table_rows;
     sequence<u8> table_alignments;
+};
+
+dictionary FfiTableCell {
+    u32 row;
+    u32 column;
+    u32 utf16_start;
+    u32 utf16_end;
+    sequence<FfiInlineSpan> inline_spans;
 };
 
 dictionary FfiDocumentStats {
@@ -157,6 +192,8 @@ interface CindermarkParser {
     constructor(optional string? image_marker_scheme = null);
     FfiParseResult parse(string text);
     FfiParseResult parse_editable(string text);
+    sequence<ListItemRange> list_item_ranges(string text);
+    sequence<ResourceReference> resource_references(string text);
     FfiIncrementalResult parse_editable_incremental(string text, u32 edit_utf16_start, u32 edit_old_utf16_len, u32 edit_new_utf16_len);
     FfiIncrementalStyleResult parse_editable_incremental_style_only(string text, u32 edit_utf16_start, u32 edit_old_utf16_len, u32 edit_new_utf16_len);
     void reset_state();

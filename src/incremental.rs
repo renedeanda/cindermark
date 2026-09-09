@@ -246,6 +246,20 @@ fn needs_full_reparse(
     edit_utf16_start: u32,
     edit_new_utf16_len: u32,
 ) -> bool {
+    // A preceding edit can change the container of distant opaque blocks.
+    // Until snapshots carry container checkpoints, reparse that dependency.
+    if prev.blocks[first_dirty..]
+        .iter()
+        .any(|block| match &block.kind {
+            BlockKind::Math { .. } | BlockKind::RawHtml { .. } => true,
+            BlockKind::CodeBlock { code, .. } => code
+                .lines()
+                .any(|line| parser::may_start_math(line) || parser::may_start_html(line)),
+            _ => false,
+        })
+    {
+        return true;
+    }
     // Check if any old dirty block is a code block, mermaid diagram, or
     // table. All three are multi-line fenced/structured blocks whose reach
     // is unbounded from any single-line edit.
@@ -253,6 +267,8 @@ fn needs_full_reparse(
         if matches!(
             block.kind,
             BlockKind::CodeBlock { .. }
+                | BlockKind::Math { .. }
+                | BlockKind::RawHtml { .. }
                 | BlockKind::MermaidDiagram { .. }
                 | BlockKind::Table { .. }
         ) {
@@ -278,7 +294,12 @@ fn needs_full_reparse(
     let scan_region = &new_source[scan_start..scan_end];
 
     for line in scan_region.lines() {
-        if line.trim().starts_with("```") {
+        if line.trim().starts_with("```")
+            || line.trim().starts_with("~~~")
+            || line.trim().starts_with("$$")
+            || parser::may_start_math(line)
+            || parser::may_start_html(line)
+        {
             return true;
         }
     }
@@ -312,6 +333,25 @@ fn shift_block(block: &mut BlockNode, byte_base: u32, utf16_base: u32, line_base
     block.utf16_end += utf16_base;
     block.line_start += line_base;
     block.line_end += line_base;
+    for cell in &mut block.table_cells {
+        cell.utf16_start += utf16_base;
+        cell.utf16_end += utf16_base;
+        for span in &mut cell.inline_spans {
+            span.utf16_start += utf16_base;
+            span.utf16_end += utf16_base;
+            span.content_utf16_start += utf16_base;
+            span.content_utf16_end += utf16_base;
+        }
+    }
+    if let BlockKind::Math {
+        content_utf16_start,
+        content_utf16_end,
+        ..
+    } = &mut block.kind
+    {
+        *content_utf16_start += utf16_base;
+        *content_utf16_end += utf16_base;
+    }
 
     // List marker metadata carries absolute offsets too — hosts consume the
     // marker UTF-16 range for marker styling/injection, so it must track the
@@ -388,6 +428,49 @@ fn shift_suffix_block(
     block.utf16_end = ue;
     block.line_start = ls;
     block.line_end = le;
+    for cell in &mut block.table_cells {
+        let Some(start) = safe_add_delta(cell.utf16_start, utf16_delta) else {
+            return false;
+        };
+        let Some(end) = safe_add_delta(cell.utf16_end, utf16_delta) else {
+            return false;
+        };
+        cell.utf16_start = start;
+        cell.utf16_end = end;
+        for span in &mut cell.inline_spans {
+            let Some(start) = safe_add_delta(span.utf16_start, utf16_delta) else {
+                return false;
+            };
+            let Some(end) = safe_add_delta(span.utf16_end, utf16_delta) else {
+                return false;
+            };
+            let Some(content_start) = safe_add_delta(span.content_utf16_start, utf16_delta) else {
+                return false;
+            };
+            let Some(content_end) = safe_add_delta(span.content_utf16_end, utf16_delta) else {
+                return false;
+            };
+            span.utf16_start = start;
+            span.utf16_end = end;
+            span.content_utf16_start = content_start;
+            span.content_utf16_end = content_end;
+        }
+    }
+    if let BlockKind::Math {
+        content_utf16_start,
+        content_utf16_end,
+        ..
+    } = &mut block.kind
+    {
+        let Some(start) = safe_add_delta(*content_utf16_start, utf16_delta) else {
+            return false;
+        };
+        let Some(end) = safe_add_delta(*content_utf16_end, utf16_delta) else {
+            return false;
+        };
+        *content_utf16_start = start;
+        *content_utf16_end = end;
+    }
 
     // Shift list marker metadata alongside the block (see `shift_block`).
     if let Some(marker) = &mut block.list_marker {
@@ -1057,6 +1140,7 @@ mod tests {
             byte_end: utf16_end,
             list_marker: None,
             inline_spans: vec![],
+            table_cells: vec![],
         }
     }
 }

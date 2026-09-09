@@ -117,6 +117,105 @@ fn bench_incremental_with_stats_2500(c: &mut Criterion) {
     bench_incremental_keystroke(c, "incremental_with_stats_2500", 2500, true);
 }
 
+fn bench_extended_syntax(c: &mut Criterion) {
+    for (name, source) in [
+        (
+            "math_1000_lines",
+            "$\\frac{α}{β} + x^2$ and ++text++\n\n".repeat(1000),
+        ),
+        ("unmatched_delimiters_1mb", "\\++ $ +++ ".repeat(100_000)),
+        (
+            "raw_html_1mb",
+            format!(
+                "<script>\n{}\n</script>",
+                "$$x$$ ++hidden++ ".repeat(65_000)
+            ),
+        ),
+        (
+            "unclosed_inline_html_1mb",
+            format!(
+                "prefix {} ++shown++ $y$",
+                "<!--<?<!DOCUMENT<![CDATA[".repeat(40_000)
+            ),
+        ),
+    ] {
+        let parser = CindermarkParser::new(None);
+        c.bench_function(name, |b| {
+            b.iter(|| parser.parse_editable(black_box(source.clone())))
+        });
+    }
+}
+
+fn bench_container_math(c: &mut Criterion) {
+    let source = "- > $$\n  > \\frac{α}{β}\n  > $$\n\n".repeat(1000);
+    let parser = CindermarkParser::new(None);
+    let parsed = parser.parse_editable(source.clone());
+    assert_eq!(
+        parsed
+            .blocks
+            .iter()
+            .filter(|block| matches!(block.block_type, cindermark::FfiBlockType::Math { .. }))
+            .count(),
+        1000
+    );
+    c.bench_function("quoted_list_math_1000", |b| {
+        b.iter(|| parser.parse_editable(black_box(source.clone())))
+    });
+}
+
+fn bench_container_html(c: &mut Criterion) {
+    let source = "- > <script>\n  > $$x$$ ++hidden++\n  > </script>\n\n".repeat(1000);
+    let parser = CindermarkParser::new(None);
+    let parsed = parser.parse_editable(source.clone());
+    assert_eq!(
+        parsed
+            .blocks
+            .iter()
+            .filter(|block| matches!(block.block_type, cindermark::FfiBlockType::RawHtml))
+            .count(),
+        1000
+    );
+    c.bench_function("quoted_list_html_1000", |b| {
+        b.iter(|| parser.parse_editable(black_box(source.clone())))
+    });
+}
+
+fn bench_compound_containers(c: &mut Criterion) {
+    for (name, unit, math) in [
+        (
+            "alternating_list_math_1000",
+            "- > - > $$\n  >   > \\frac{α}{β}\n  >   > $$\n\n",
+            true,
+        ),
+        (
+            "alternating_list_html_1000",
+            "- > - > <!--\n  >   > $$x$$ ++hidden++\n  >   > -->\n\n",
+            false,
+        ),
+    ] {
+        let source = unit.repeat(1000);
+        let parser = CindermarkParser::new(None);
+        let parsed = parser.parse_editable(source.clone());
+        assert_eq!(
+            parsed
+                .blocks
+                .iter()
+                .filter(|block| {
+                    if math {
+                        matches!(block.block_type, cindermark::FfiBlockType::Math { .. })
+                    } else {
+                        matches!(block.block_type, cindermark::FfiBlockType::RawHtml)
+                    }
+                })
+                .count(),
+            1000
+        );
+        c.bench_function(name, |b| {
+            b.iter(|| parser.parse_editable(black_box(source.clone())))
+        });
+    }
+}
+
 criterion_group!(
     benches,
     bench_parse_500,
@@ -125,6 +224,36 @@ criterion_group!(
     bench_incremental_500,
     bench_incremental_2500,
     bench_incremental_10k,
-    bench_incremental_with_stats_2500
+    bench_incremental_with_stats_2500,
+    bench_extended_syntax,
+    bench_container_math,
+    bench_container_html,
+    bench_compound_containers,
+    bench_list_ranges,
+    bench_resource_references
 );
 criterion_main!(benches);
+
+fn bench_list_ranges(c: &mut Criterion) {
+    for count in [500, 2500] {
+        let source = (0..count)
+            .map(|i| format!("- [ ] Task {i}\n  - [x] Child\n  continuation\n"))
+            .collect::<String>();
+        c.bench_function(&format!("list_ranges_{count}"), |b| {
+            b.iter(|| cindermark::parser::list_item_ranges(black_box(&source), &Default::default()))
+        });
+    }
+}
+
+fn bench_resource_references(c: &mut Criterion) {
+    for count in [500, 2500] {
+        let source = (0..count)
+            .map(|i| format!("- ![Photo {i}](Attachments/photo-{i}.png)\r\n"))
+            .collect::<String>();
+        c.bench_function(&format!("resource_references_{count}"), |b| {
+            b.iter(|| {
+                cindermark::resources::resource_references(black_box(&source), &Default::default())
+            })
+        });
+    }
+}
