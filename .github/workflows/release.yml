@@ -114,7 +114,7 @@ jobs:
           pathlib.Path("out/provenance.json").write_text(json.dumps(record, indent=2) + "\n")
           PY
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cindermark-${{ inputs.version }}-apple
           path: |
