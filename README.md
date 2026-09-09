@@ -32,20 +32,20 @@ of complete CommonMark or GFM conformance; see the [compatibility profile](docs/
 
 **New in 0.2.0:** **nested lists** — bullets, ordered lists, and checkboxes indented for nesting (up to 32 tab-expanded columns) now parse as nested items instead of degrading to indented code (column-based; see [Known limitations](#known-limitations)) — plus a **WebAssembly build** (`wasm` feature) that powers the [live browser playground](https://embernotes.app/cindermark).
 
-**Preparing 0.3.0:** source-ranged inline/display/fenced math, `++` underline,
+**New in 0.3.0:** source-ranged inline/display/fenced math, `++` underline,
 table-cell spans, list-subtree ranges and resource references. See the
 [migration guide](docs/migrating-0.3.md) for breaking Rust and binding changes.
 
 The test suite includes incremental/full-parse parity checks and malformed-input
-properties. Source version 0.3.0 is under development; the published installation
-examples below continue to target 0.2.0.
+properties. Version 0.3.0 is available on crates.io and through Swift Package
+Manager with optimized Apple binaries. WASM remains a build-from-source target.
 
 ## Using from Swift (iOS / macOS)
 
 ### Swift Package Manager
 
 ```swift
-.package(url: "https://github.com/renedeanda/cindermark", from: "0.2.0")
+.package(url: "https://github.com/renedeanda/cindermark", from: "0.3.0")
 ```
 
 ```swift
@@ -96,7 +96,7 @@ This drops `libcindermark.a` (per-SDK: device / simulator / macOS), the generate
 
 ```toml
 [dependencies]
-cindermark = "0.2"
+cindermark = "0.3"
 ```
 
 ```rust
