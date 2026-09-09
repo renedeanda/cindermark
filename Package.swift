@@ -23,8 +23,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "CindermarkFFIFFI",
-            url: "https://github.com/renedeanda/cindermark/releases/download/v0.2.0/CindermarkFFI.xcframework.zip",
-            checksum: "5020485ef10eb26fe0dd4fb0bf0749deb9fcc6c44b0ada934e3c43adf1d9d6f9" // PLACEHOLDER — patched by release.yml
+            url: "https://github.com/renedeanda/cindermark/releases/download/v0.3.0/CindermarkFFI.xcframework.zip",
+            checksum: "58250d32cdd65e2dbb9f3e7f4a902dacbda32f4be045d2b373476820d221fffd" // PLACEHOLDER — patched by release.yml
         ),
         .target(
             name: "Cindermark",
