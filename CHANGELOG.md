@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-09
+
 ### Added
 - On-demand inline resource references with exact UTF-16 source/label ranges,
   raw destinations and image identity through Rust, UniFFI and WASM.
@@ -18,15 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WASM transport and literal preview fallback.
 - List/quote-contained HTML shares math's container projection, preserving raw
   prefixes and marker metadata without consuming adjacent siblings.
-- 0.3.0 development: plus-delimited underline and opaque inline/display/fenced
+- Plus-delimited underline and opaque inline/display/fenced
   math, UTF-16 table-cell spans, and WASM schema version 2 metadata.
 - Source-range, malformed-input, Unicode and incremental-edit regression tests.
 - List-contained math with ordered/task identity, continuation indentation and
   source-backed marker metadata.
 
 ### Changed
-- Source version is 0.3.0 because new exhaustive Rust/UniFFI enum variants and
-  record fields require consumer updates. No publication or tag is implied.
+- New exhaustive Rust/UniFFI enum variants and record fields require consumer
+  updates; see the 0.3 migration guide.
 - Backlink extraction uses parsed spans, including in table cells, so code and
   math cannot create links from their literal content.
 - The compatibility profile explicitly distinguishes extensions and incomplete
