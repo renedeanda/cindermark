@@ -30,7 +30,7 @@ of complete CommonMark or GFM conformance; see the [compatibility profile](docs/
 | Inline | Bold, italic, bold-italic (delimiter runs with Unicode flanking), strikethrough, inline code (multi-backtick), links, autolinks (bare URLs, domains, emails, subreddits), wiki links `[[...]]`, highlights `==...==` (plus colored/hex variants), underline (`<u>`/tilde), footnote refs, hex color literals, comments |
 | Editor extras | Document stats as a parse byproduct, wiki-link extraction, heading outline extraction, checkbox toggling, plain-text preview rendering with span ranges, configurable image-marker URI scheme for attachment placeholders |
 
-**New in 0.2.0:** **nested lists** — bullets, ordered lists, and checkboxes indented for nesting (up to 32 tab-expanded columns) now parse as nested items instead of degrading to indented code (column-based; see [Known limitations](#known-limitations)) — plus a **WebAssembly build** (`wasm` feature) that powers the [live browser playground](https://embernotes.app/cindermark).
+**New in 0.2.0:** **nested lists** — bullets, ordered lists, and checkboxes indented for nesting (up to 32 tab-expanded columns) now parse as nested items instead of degrading to indented code (column-based; see [Known limitations](#known-limitations)) — plus a **WebAssembly build** (`wasm` feature) that powers the [live browser playground](https://cindermark.org/).
 
 **New in 0.3.0:** source-ranged inline/display/fenced math, `++` underline,
 table-cell spans, list-subtree ranges and resource references. See the

@@ -1,7 +1,7 @@
 //! Browser bindings (`--features wasm`, target `wasm32-unknown-unknown`).
 //!
 //! A thin `wasm-bindgen` surface over [`CindermarkParser`] for interactive
-//! demos — notably the live playground at <https://embernotes.app/cindermark>.
+//! demos — notably the live playground at <https://cindermark.org/>.
 //! Results cross the JS boundary as compact JSON strings: the payloads are
 //! small (block/span metadata, never the document text), so hand-rolled JSON
 //! keeps the `.wasm` binary free of a serde dependency.
