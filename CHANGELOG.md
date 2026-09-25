@@ -55,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parsing at 0–3 space indents is byte-identical to 0.1.0.
 - **WebAssembly build (`wasm` feature).** A `wasm-bindgen` surface
   (`WasmParser`: `parseJson`, `keystroke`, `resetState`) that powers the live
-  browser playground at <https://embernotes.app/cindermark>. Payloads use a
+  browser playground at <https://cindermark.org/>. Payloads use a
   hand-rolled JSON encoder, so `serde` never enters the `.wasm`.
 - **Cargo feature flags with a pure-Rust default.** `cargo add cindermark`
   now pulls only three crates — `memchr`, `rustc-hash`,
