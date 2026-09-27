@@ -123,6 +123,11 @@ pub(crate) fn annotate_range(
     }
     positions[text.len()] = pos;
     let parts: Vec<(usize, &str)> = text.grapheme_indices(true).collect();
+    let colors: Vec<_> = spans
+        .iter()
+        .filter(|span| matches!(span.kind, InlineKind::HexColor { .. }))
+        .cloned()
+        .collect();
     // The opt-in grammar classifies complete candidates, never a color prefix.
     spans.retain(|s| !matches!(s.kind, InlineKind::HexColor { .. }));
     let mut i = 0;
@@ -233,6 +238,30 @@ pub(crate) fn annotate_range(
             content_utf16_end: positions[byte_end],
         });
         i = name_end + usize::from(closed);
+    }
+    // Existing color boundaries also allow punctuation such as `color:#fff`.
+    // Preserve them unless the literal is part of a longer semantic candidate.
+    for color in colors {
+        let end = parts.partition_point(|(offset, _)| positions[*offset] < color.utf16_end);
+        let continues = parts
+            .get(end)
+            .is_some_and(|(_, part)| word(part) || matches!(*part, "-" | "_" | "/"));
+        let start = parts.partition_point(|(offset, _)| positions[*offset] < color.utf16_start);
+        let protected = parts.get(start).is_none_or(|(offset, _)| mask[*offset]);
+        if !continues
+            && !protected
+            && !spans.iter().any(|span| {
+                matches!(
+                    span.kind,
+                    InlineKind::Tag { .. }
+                        | InlineKind::Mention { .. }
+                        | InlineKind::HexColor { .. }
+                ) && span.utf16_start < color.utf16_end
+                    && color.utf16_start < span.utf16_end
+            })
+        {
+            spans.push(color);
+        }
     }
     spans.sort_by_key(|s| (s.utf16_start, std::cmp::Reverse(s.utf16_end)));
 }

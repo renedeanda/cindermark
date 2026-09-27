@@ -87,6 +87,31 @@ fn default_behavior_is_unchanged() {
         .iter()
         .any(|s| matches!(s.kind, InlineKind::HexColor { .. })));
 }
+
+#[test]
+fn existing_color_boundaries_survive_semantic_annotations() {
+    for source in ["accent:#fff", "color=#FF5733;", "#fff, #abcd", "**#fff**"] {
+        let colors = |spans: Vec<InlineKind>| {
+            spans
+                .into_iter()
+                .filter(|kind| matches!(kind, InlineKind::HexColor { .. }))
+                .collect::<Vec<_>>()
+        };
+        let original = parser::parse(source, ParseMode::Editable)
+            .blocks
+            .into_iter()
+            .flat_map(|block| block.inline_spans.into_iter().map(|span| span.kind))
+            .collect();
+        assert_eq!(colors(kinds(source)), colors(original), "{source}");
+    }
+    assert_eq!(
+        names("#fff-launch #fff/project"),
+        ["#fff-launch", "#fff/project"]
+    );
+    assert!(!kinds("#fff-launch #fff/project `color:#fff`")
+        .iter()
+        .any(|kind| matches!(kind, InlineKind::HexColor { .. })));
+}
 #[test]
 fn completion_respects_context_and_utf16() {
     let p = CindermarkParser::with_semantic_tokens(None);
