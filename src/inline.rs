@@ -498,7 +498,7 @@ fn parse_table_spans(block: &mut BlockNode, source: &[u8], map: &Utf16Map) {
     }
 }
 
-fn protect_html(text: &[u8], protected: &mut [bool]) {
+pub(crate) fn protect_html(text: &[u8], protected: &mut [bool]) {
     let mut exhausted = [false; 4];
     let mut tag_start = None;
     let mut quote = None;
@@ -1532,7 +1532,7 @@ fn parse_hex_colors(
 }
 
 /// Expand 3/4-digit hex to 6, drop alpha from 8-digit, lowercase everything.
-fn normalize_hex(raw: &str, hex_len: usize) -> String {
+pub(crate) fn normalize_hex(raw: &str, hex_len: usize) -> String {
     match hex_len {
         3 => raw
             .chars()

@@ -151,3 +151,40 @@ Alignment values are 0 default, 1 left, 2 center and 3 right.
 
 Upstream fixture text is not vendored by this change. A future conformance
 harness must preserve the upstream specification's attribution and license.
+
+## Optional semantic tokens
+
+`ParseOptions { semantic_tokens: true, ..Default::default() }` and the UniFFI
+`with_semantic_tokens` constructor enable tags and entity mentions. The ordinary
+constructor is unchanged. The additional Rust/UniFFI enum cases require exhaustive
+consumers to update; regenerate bindings and native libraries together. WASM's
+span transport recognizes the new variants, but its existing parse entry point
+continues to use default options.
+
+A token starts at a text boundary (start, whitespace, opening punctuation, or
+an admitted formatting content boundary). Names contain Unicode alphanumeric
+graphemes, with single internal hyphens/underscores; tags additionally admit
+slash-separated paths. `#meeting notes#` is a closed multiword tag; an unclosed
+`#meeting notes` recognizes only `#meeting`. A space after the opener is never a
+tag, so headings retain their Markdown meaning. Names retain their exact spelling;
+normalization, identity, indexing, and navigation are the host's responsibility.
+
+Complete 3/4/6/8-digit hexadecimal candidates are `HexColor`, including supported
+alpha forms. `#fff-launch` is a tag, not a color prefix. Existing color value
+normalization is retained. Escaped openers, code, links/images/autolinks, wiki links,
+comments, math, HTML markup and opaque blocks are excluded. Formatting can contain
+tokens. Table cells share the same classification. Unsupported Markdown remains
+subject to the existing compatibility profile; this extension does not establish
+full CommonMark conformance.
+
+Full ranges retain sigils and a closing tag delimiter; content ranges cover names.
+Preview text keeps semantic sigils. Source is never rewritten. Incremental results
+must equal a full parse, including shifts before unchanged tokens and fence edits.
+
+`semantic_completion` returns a query and replacement range ending at the caret, consuming an existing closing tag sigil when present.
+Completion is suppressed within a word to avoid duplicating its suffix.
+It admits bare openers and incomplete names only in eligible Markdown contexts,
+rejects exact color values, limits queries to 160 Unicode scalar values, and does
+not replace editor snapshots. Completion is a synchronous parse of a temporary
+probe; hosts should avoid calling it during IME composition and measure latency
+for their document sizes. Returning a candidate does not imply it is selected.

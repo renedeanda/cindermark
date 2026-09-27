@@ -520,6 +520,8 @@ public protocol CindermarkParserProtocol : AnyObject {
     
     func resourceReferences(text: String)  -> [ResourceReference]
     
+    func semanticCompletion(text: String, cursorUtf16: UInt32)  -> SemanticCompletion?
+    
     func toggleCheckbox(text: String, lineIndex: UInt32)  -> String
     
 }
@@ -579,6 +581,14 @@ public convenience init(imageMarkerScheme: String? = nil) {
         try! rustCall { uniffi_cindermark_fn_free_cindermarkparser(pointer, $0) }
     }
 
+    
+public static func withSemanticTokens(imageMarkerScheme: String? = nil) -> CindermarkParser {
+    return try!  FfiConverterTypeCindermarkParser.lift(try! rustCall() {
+    uniffi_cindermark_fn_constructor_cindermarkparser_with_semantic_tokens(
+        FfiConverterOptionString.lower(imageMarkerScheme),$0
+    )
+})
+}
     
 
     
@@ -675,6 +685,15 @@ open func resourceReferences(text: String) -> [ResourceReference] {
     return try!  FfiConverterSequenceTypeResourceReference.lift(try! rustCall() {
     uniffi_cindermark_fn_method_cindermarkparser_resource_references(self.uniffiClonePointer(),
         FfiConverterString.lower(text),$0
+    )
+})
+}
+    
+open func semanticCompletion(text: String, cursorUtf16: UInt32) -> SemanticCompletion? {
+    return try!  FfiConverterOptionTypeSemanticCompletion.lift(try! rustCall() {
+    uniffi_cindermark_fn_method_cindermarkparser_semantic_completion(self.uniffiClonePointer(),
+        FfiConverterString.lower(text),
+        FfiConverterUInt32.lower(cursorUtf16),$0
     )
 })
 }
@@ -2170,6 +2189,88 @@ public func FfiConverterTypeResourceReference_lower(_ value: ResourceReference) 
     return FfiConverterTypeResourceReference.lower(value)
 }
 
+
+public struct SemanticCompletion {
+    public let isTag: Bool
+    public let query: String
+    public let utf16Start: UInt32
+    public let utf16End: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(isTag: Bool, query: String, utf16Start: UInt32, utf16End: UInt32) {
+        self.isTag = isTag
+        self.query = query
+        self.utf16Start = utf16Start
+        self.utf16End = utf16End
+    }
+}
+
+
+
+extension SemanticCompletion: Equatable, Hashable {
+    public static func ==(lhs: SemanticCompletion, rhs: SemanticCompletion) -> Bool {
+        if lhs.isTag != rhs.isTag {
+            return false
+        }
+        if lhs.query != rhs.query {
+            return false
+        }
+        if lhs.utf16Start != rhs.utf16Start {
+            return false
+        }
+        if lhs.utf16End != rhs.utf16End {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(isTag)
+        hasher.combine(query)
+        hasher.combine(utf16Start)
+        hasher.combine(utf16End)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSemanticCompletion: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SemanticCompletion {
+        return
+            try SemanticCompletion(
+                isTag: FfiConverterBool.read(from: &buf), 
+                query: FfiConverterString.read(from: &buf), 
+                utf16Start: FfiConverterUInt32.read(from: &buf), 
+                utf16End: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SemanticCompletion, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.isTag, into: &buf)
+        FfiConverterString.write(value.query, into: &buf)
+        FfiConverterUInt32.write(value.utf16Start, into: &buf)
+        FfiConverterUInt32.write(value.utf16End, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSemanticCompletion_lift(_ buf: RustBuffer) throws -> SemanticCompletion {
+    return try FfiConverterTypeSemanticCompletion.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSemanticCompletion_lower(_ value: SemanticCompletion) -> RustBuffer {
+    return FfiConverterTypeSemanticCompletion.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -2389,6 +2490,10 @@ public enum FfiInlineType {
     case underlinePlus
     case math(expression: String
     )
+    case tag(name: String
+    )
+    case mention(name: String
+    )
 }
 
 
@@ -2442,6 +2547,12 @@ public struct FfiConverterTypeFfiInlineType: FfiConverterRustBuffer {
         case 17: return .underlinePlus
         
         case 18: return .math(expression: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 19: return .tag(name: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 20: return .mention(name: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -2528,6 +2639,16 @@ public struct FfiConverterTypeFfiInlineType: FfiConverterRustBuffer {
         case let .math(expression):
             writeInt(&buf, Int32(18))
             FfiConverterString.write(expression, into: &buf)
+            
+        
+        case let .tag(name):
+            writeInt(&buf, Int32(19))
+            FfiConverterString.write(name, into: &buf)
+            
+        
+        case let .mention(name):
+            writeInt(&buf, Int32(20))
+            FfiConverterString.write(name, into: &buf)
             
         }
     }
@@ -2621,6 +2742,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeSemanticCompletion: FfiConverterRustBuffer {
+    typealias SwiftType = SemanticCompletion?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSemanticCompletion.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSemanticCompletion.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -2974,10 +3119,16 @@ private var initializationResult: InitializationResult = {
     if (uniffi_cindermark_checksum_method_cindermarkparser_resource_references() != 14802) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_cindermark_checksum_method_cindermarkparser_semantic_completion() != 47845) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_cindermark_checksum_method_cindermarkparser_toggle_checkbox() != 24460) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_cindermark_checksum_constructor_cindermarkparser_new() != 51368) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_cindermark_checksum_constructor_cindermarkparser_with_semantic_tokens() != 51348) {
         return InitializationResult.apiChecksumMismatch
     }
 

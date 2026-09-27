@@ -44,6 +44,8 @@ struct ParsedListMarker<'a> {
 /// Options controlling opt-in parser extensions.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParseOptions {
+    /// Opt-in source-preserving tags and entity mentions.
+    pub semantic_tokens: bool,
     /// URI-scheme prefix for block-level image / attachment markers:
     /// `![](<scheme><UUID>)` on a line by itself. The scheme string is the
     /// literal text between `![](` and the UUID, including any trailing
@@ -783,6 +785,9 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
 
     // Run inline parsing on all blocks
     inline::parse_inline_spans(&mut blocks, bytes, &utf16_map);
+    if options.semantic_tokens {
+        crate::semantic::annotate(&mut blocks, source, &utf16_map);
+    }
 
     Document {
         line_count: lines.len() as u32,
@@ -3281,6 +3286,7 @@ mod tests {
 
     fn ember_options() -> ParseOptions {
         ParseOptions {
+            semantic_tokens: false,
             image_marker_scheme: Some("ember:".to_string()),
         }
     }
@@ -3356,6 +3362,7 @@ mod tests {
     #[test]
     fn image_marker_custom_scheme_recognised() {
         let options = ParseOptions {
+            semantic_tokens: false,
             image_marker_scheme: Some("cinder:".to_string()),
         };
         let blocks = parse_with_options(
@@ -3386,6 +3393,7 @@ mod tests {
     #[test]
     fn image_marker_interrupts_adjacent_paragraphs() {
         let options = ParseOptions {
+            semantic_tokens: false,
             image_marker_scheme: Some("host:".to_string()),
         };
         let src = "Before\n![](host:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)\nAfter\n";

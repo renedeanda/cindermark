@@ -270,6 +270,10 @@ fn push_spans(out: &mut String, spans: &[FfiInlineSpan]) {
                 push_json_string(out, expression);
                 out.push_str(",\"syntax\":\"dollars\"");
             }
+            FfiInlineType::Tag { name } | FfiInlineType::Mention { name } => {
+                out.push_str(",\"name\":");
+                push_json_string(out, name);
+            }
             FfiInlineType::UnderlinePlus => out.push_str(",\"syntax\":\"plus\""),
             FfiInlineType::Link { url } | FfiInlineType::AutoLink { url } => {
                 out.push_str(",\"url\":");
@@ -340,6 +344,8 @@ fn inline_type_name(inline_type: &FfiInlineType) -> &'static str {
         FfiInlineType::FootnoteRef => "footnoteRef",
         FfiInlineType::Comment => "comment",
         FfiInlineType::HexColor { .. } => "hexColor",
+        FfiInlineType::Tag { .. } => "tag",
+        FfiInlineType::Mention { .. } => "mention",
     }
 }
 

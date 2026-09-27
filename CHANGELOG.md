@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opt-in source-preserving `Tag` and `Mention` inline spans, sharing Markdown
+  context exclusions and complete-token hex-color precedence.
+- Read-only semantic completion queries with UTF-16 ranges through Rust/UniFFI.
+  Existing constructors keep semantic annotations disabled.
 - On-demand inline resource references with exact UTF-16 source/label ranges,
   raw destinations and image identity through Rust, UniFFI and WASM.
 - On-demand list subtree source ranges, parent/sibling identities and task state
