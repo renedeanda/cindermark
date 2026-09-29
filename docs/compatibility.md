@@ -188,3 +188,10 @@ rejects exact color values, limits queries to 160 Unicode scalar values, and doe
 not replace editor snapshots. Completion is a synchronous parse of a temporary
 probe; hosts should avoid calling it during IME composition and measure latency
 for their document sizes. Returning a candidate does not imply it is selected.
+
+Numeric-only tag candidates stay literal (for example, prose rankings `#1` and `#2`).
+A tag must contain a Unicode alphabetic character somewhere in its complete name;
+`#3d`, `#work/2026`, and `#2026/work` are valid. Supported hex color forms take
+precedence, including numeric colors such as `#123` and `#2026`. Mentions are
+unchanged. Completion waits for a letter after a numeric tag prefix, while a bare
+`#` still offers discovery. These rules apply only to the opt-in semantic extension.

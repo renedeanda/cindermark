@@ -214,10 +214,14 @@ pub(crate) fn annotate_range(
         let byte_end = parts.get(name_end).map_or(text.len(), |p| p.0);
         let name = &text[begin + 1..byte_end];
         let full_end = if closed { byte_end + 1 } else { byte_end };
-        let kind = if is_tag
+        let is_color = is_tag
             && matches!(name.len(), 3 | 4 | 6 | 8)
-            && name.bytes().all(|b| b.is_ascii_hexdigit())
-        {
+            && name.bytes().all(|b| b.is_ascii_hexdigit());
+        if is_tag && !is_color && !name.chars().any(char::is_alphabetic) {
+            i = name_end + usize::from(closed);
+            continue;
+        }
+        let kind = if is_color {
             InlineKind::HexColor {
                 hex: crate::inline::normalize_hex(name, name.len()),
             }
@@ -344,6 +348,9 @@ pub fn completion(
         && matches!(query.len(), 3 | 4 | 6 | 8)
         && query.bytes().all(|b| b.is_ascii_hexdigit())
     {
+        return None;
+    }
+    if marker == '#' && !query.is_empty() && !query.chars().any(char::is_alphabetic) {
         return None;
     }
     Some(SemanticCompletion {

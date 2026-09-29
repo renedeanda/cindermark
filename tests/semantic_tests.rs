@@ -150,6 +150,10 @@ fn incremental_matches_full() {
     let mut old = "😀 @Mike\n\n#fff\n\n#work/project".to_owned();
     p.parse_editable(old.clone());
     for new in [
+        "😀 @Jane\n\n#1\n\n#work/project",
+        "😀 @Jane\n\n#1a\n\n#work/project",
+        "😀 @Jane\n\n#123\n\n#work/project",
+        "😀 @Jane\n\n#１２\n\n#work/project",
         "😀 @Jane\n\n#fff\n\n#work/project",
         "😀 @Jane\n\n#fff-launch\n\n#work/project",
         "😀 @Jane\n\n#meeting notes#\n\n#work/project",
@@ -241,4 +245,33 @@ fn completion_does_not_duplicate_a_suffix_or_closing_sigil() {
     assert!(p.semantic_completion("@Michael".into(), 3).is_none());
     let closed = p.semantic_completion("#meeting notes#".into(), 14).unwrap();
     assert_eq!(closed.utf16_end, 15);
+}
+
+#[test]
+fn numeric_tags_stay_literal_without_changing_colors_or_mentions() {
+    assert!(names("Rank #1, #2; #2026 #１２ #١٢ #1/2 #12 34#").is_empty());
+    assert_eq!(
+        names("#3d #v2 #work/2026 #2026/work @123 #学校2"),
+        ["#3d", "#v2", "#work/2026", "#2026/work", "@123", "#学校2"]
+    );
+    for text in ["#123", "#2026", "#123456", "#12345678", "#fff", "#FF5733"] {
+        assert!(kinds(text)
+            .iter()
+            .any(|kind| matches!(kind, InlineKind::HexColor { .. })));
+    }
+}
+
+#[test]
+fn numeric_completion_waits_for_a_letter() {
+    let parser = CindermarkParser::with_semantic_tokens(None);
+    for source in ["#1", "#12", "#１２", "#1/2"] {
+        assert!(parser
+            .semantic_completion(source.into(), source.encode_utf16().count() as u32)
+            .is_none());
+    }
+    for source in ["#", "#3d", "#work/2026", "@123"] {
+        assert!(parser
+            .semantic_completion(source.into(), source.encode_utf16().count() as u32)
+            .is_some());
+    }
 }
