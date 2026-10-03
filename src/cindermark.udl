@@ -53,6 +53,8 @@ interface FfiInlineType {
     HexColor(string hex);
     UnderlinePlus();
     Math(string expression);
+    Tag(string name);
+    Mention(string name);
 };
 
 dictionary FfiInlineSpan {
@@ -188,8 +190,18 @@ dictionary FfiRenderedPreview {
     sequence<FfiPreviewSpan> spans;
 };
 
+dictionary SemanticCompletion {
+    boolean is_tag;
+    string query;
+    u32 utf16_start;
+    u32 utf16_end;
+};
+
 interface CindermarkParser {
     constructor(optional string? image_marker_scheme = null);
+    [Name=with_semantic_tokens]
+    constructor(optional string? image_marker_scheme = null);
+    SemanticCompletion? semantic_completion(string text, u32 cursor_utf16);
     FfiParseResult parse(string text);
     FfiParseResult parse_editable(string text);
     sequence<ListItemRange> list_item_ranges(string text);

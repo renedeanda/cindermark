@@ -357,6 +357,12 @@ pub struct InlineSpan {
 /// Inline formatting kind.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InlineKind {
+    Tag {
+        name: String,
+    },
+    Mention {
+        name: String,
+    },
     Bold,
     Italic,
     BoldItalic,

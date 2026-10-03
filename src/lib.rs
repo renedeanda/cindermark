@@ -19,6 +19,8 @@ pub mod inline;
 pub mod lexer;
 pub mod parser;
 pub mod resources;
+pub mod semantic;
+pub use semantic::SemanticCompletion;
 pub mod utf16;
 
 pub use resources::ResourceReference;
@@ -86,6 +88,8 @@ pub enum FfiInlineType {
     HexColor { hex: String },
     UnderlinePlus,
     Math { expression: String },
+    Tag { name: String },
+    Mention { name: String },
 }
 
 /// An inline span for FFI transport.
@@ -258,6 +262,8 @@ fn convert_inline_span(span: &InlineSpan) -> FfiInlineSpan {
         InlineKind::FootnoteRef => FfiInlineType::FootnoteRef,
         InlineKind::Comment => FfiInlineType::Comment,
         InlineKind::HexColor { hex } => FfiInlineType::HexColor { hex: hex.clone() },
+        InlineKind::Tag { name } => FfiInlineType::Tag { name: name.clone() },
+        InlineKind::Mention { name } => FfiInlineType::Mention { name: name.clone() },
     };
     FfiInlineSpan {
         inline_type,
@@ -874,8 +880,24 @@ impl CindermarkParser {
             state: Mutex::new(None),
             options: parser::ParseOptions {
                 image_marker_scheme: sanitize_scheme(image_marker_scheme),
+                semantic_tokens: false,
             },
         }
+    }
+
+    pub fn with_semantic_tokens(image_marker_scheme: Option<String>) -> Self {
+        let mut parser = Self::new(image_marker_scheme);
+        parser.options.semantic_tokens = true;
+        parser
+    }
+
+    /// Does not replace the active incremental snapshot.
+    pub fn semantic_completion(
+        &self,
+        text: String,
+        cursor_utf16: u32,
+    ) -> Option<SemanticCompletion> {
+        semantic::completion(&text, cursor_utf16, &self.options)
     }
 
     /// Full parse in grouped mode (for rendering). Does not affect incremental state.
@@ -1091,20 +1113,21 @@ impl CindermarkParser {
 
         // Generate previews from the same AST — no re-parse
         let limit = std::cmp::max(short_preview_max, long_preview_max) as usize;
-        let (short_preview, long_preview) = match build_clean_preview_from_doc(&doc, limit) {
-            Some(preview) => {
-                let short = truncate_preview(&preview, short_preview_max);
-                let long = truncate_preview(&preview, long_preview_max);
-                (short, long)
-            }
-            None => {
-                let empty = FfiRenderedPreview {
-                    plain_text: String::new(),
-                    spans: Vec::new(),
-                };
-                (empty.clone(), empty)
-            }
-        };
+        let (short_preview, long_preview) =
+            match build_clean_preview_from_doc(&doc, limit, &self.options) {
+                Some(preview) => {
+                    let short = truncate_preview(&preview, short_preview_max);
+                    let long = truncate_preview(&preview, long_preview_max);
+                    (short, long)
+                }
+                None => {
+                    let empty = FfiRenderedPreview {
+                        plain_text: String::new(),
+                        spans: Vec::new(),
+                    };
+                    (empty.clone(), empty)
+                }
+            };
 
         FfiSaveParseResult {
             blocks,
@@ -1141,6 +1164,8 @@ fn convert_inline_kind(kind: &InlineKind) -> FfiInlineType {
         InlineKind::FootnoteRef => FfiInlineType::FootnoteRef,
         InlineKind::Comment => FfiInlineType::Comment,
         InlineKind::HexColor { hex } => FfiInlineType::HexColor { hex: hex.clone() },
+        InlineKind::Tag { name } => FfiInlineType::Tag { name: name.clone() },
+        InlineKind::Mention { name } => FfiInlineType::Mention { name: name.clone() },
     }
 }
 
@@ -1158,10 +1183,14 @@ fn build_clean_preview(
     options: &parser::ParseOptions,
 ) -> Option<CleanPreview> {
     let doc = parser::parse_with_options(text, ParseMode::Grouped, options);
-    build_clean_preview_from_doc(&doc, approx_limit)
+    build_clean_preview_from_doc(&doc, approx_limit, options)
 }
 
-fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<CleanPreview> {
+fn build_clean_preview_from_doc(
+    doc: &Document,
+    approx_limit: usize,
+    options: &parser::ParseOptions,
+) -> Option<CleanPreview> {
     let mut raw_parts: Vec<String> = Vec::new();
     let mut math_parts = std::collections::HashMap::new();
     let mut raw_parts_indices = std::collections::HashSet::new();
@@ -1261,12 +1290,22 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
                 content_utf16_end: end,
             });
         } else if !raw_parts_indices.contains(&index) {
-            inline_spans.extend(inline::parse_spans(
+            let mut part_spans = inline::parse_spans(
                 part.as_bytes(),
                 byte_offset,
                 preview_bytes,
                 &preview_utf16_map,
-            ));
+            );
+            if options.semantic_tokens {
+                semantic::annotate_range(
+                    &raw_preview,
+                    byte_offset,
+                    byte_offset + part.len(),
+                    preview_utf16_map.byte_to_utf16(byte_offset as u32, preview_bytes),
+                    &mut part_spans,
+                );
+            }
+            inline_spans.extend(part_spans);
         }
         byte_offset += part.len() + 1;
     }
@@ -1275,7 +1314,10 @@ fn build_clean_preview_from_doc(doc: &Document, approx_limit: usize) -> Option<C
     let mut is_marker = vec![false; preview_utf16_len];
 
     for span in &inline_spans {
-        if matches!(span.kind, InlineKind::Math { .. }) {
+        if matches!(
+            span.kind,
+            InlineKind::Math { .. } | InlineKind::Tag { .. } | InlineKind::Mention { .. }
+        ) {
             continue;
         }
         // Hidden comments are stripped in their entirety from preview — mark

@@ -44,6 +44,8 @@ struct ParsedListMarker<'a> {
 /// Options controlling opt-in parser extensions.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParseOptions {
+    /// Opt-in source-preserving tags and entity mentions.
+    pub semantic_tokens: bool,
     /// URI-scheme prefix for block-level image / attachment markers:
     /// `![](<scheme><UUID>)` on a line by itself. The scheme string is the
     /// literal text between `![](` and the UUID, including any trailing
@@ -384,41 +386,37 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
             && i + 1 < lines.len()
             && is_table_separator(lines[i + 1].text.trim())
         {
+            let start_line = i;
             let headers = parse_table_row(trimmed);
-            // Column limit: tables beyond MAX_TABLE_COLUMNS fall through to paragraph
-            if headers.len() <= MAX_TABLE_COLUMNS {
-                let start_line = i;
-                let separator_line = lines[i + 1].text.trim();
-                let alignments = parse_alignments(separator_line);
-                i += 2; // skip header + separator
-                let mut rows: Vec<Vec<String>> = Vec::new();
-                while i < lines.len() && rows.len() < MAX_TABLE_ROWS {
-                    let rt = lines[i].text.trim();
-                    if !is_table_row(rt) {
-                        break;
+            let separator_line = lines[i + 1].text.trim();
+            let alignments = parse_alignments(separator_line);
+            i += 2;
+            let mut rows = Vec::new();
+            let mut oversized = headers.len() > MAX_TABLE_COLUMNS;
+            while i < lines.len() && is_table_row(lines[i].text.trim()) {
+                if !oversized {
+                    let row = parse_table_row(lines[i].text.trim());
+                    oversized = rows.len() >= MAX_TABLE_ROWS || row.len() > headers.len();
+                    if !oversized {
+                        rows.push(row);
                     }
-                    rows.push(parse_table_row(rt));
-                    i += 1;
                 }
-                // Skip remaining rows beyond the limit
-                while i < lines.len() && is_table_row(lines[i].text.trim()) {
-                    i += 1;
-                }
-                blocks.push(make_block(
-                    BlockKind::Table {
-                        headers,
-                        rows,
-                        alignments,
-                    },
-                    &lines,
-                    start_line,
-                    i,
-                    bytes,
-                    &utf16_map,
-                ));
-                continue;
+                i += 1;
             }
-            // else: too many columns, fall through to paragraph
+            // A partial grid cannot safely round-trip edits to the complete source.
+            let kind = if oversized {
+                BlockKind::Paragraph {
+                    text: source[lines[start_line].byte_start..lines[i - 1].byte_end].to_owned(),
+                }
+            } else {
+                BlockKind::Table {
+                    headers,
+                    rows,
+                    alignments,
+                }
+            };
+            blocks.push(make_block(kind, &lines, start_line, i, bytes, &utf16_map));
+            continue;
         }
 
         // Horizontal rule
@@ -783,6 +781,9 @@ pub fn parse_with_options(source: &str, mode: ParseMode, options: &ParseOptions)
 
     // Run inline parsing on all blocks
     inline::parse_inline_spans(&mut blocks, bytes, &utf16_map);
+    if options.semantic_tokens {
+        crate::semantic::annotate(&mut blocks, source, &utf16_map);
+    }
 
     Document {
         line_count: lines.len() as u32,
@@ -2286,6 +2287,48 @@ mod tests {
         assert_eq!(super::MAX_TABLE_COLUMNS, 20);
     }
 
+    #[test]
+    fn oversized_tables_remain_complete_literal_blocks() {
+        for (columns, rows, is_table) in [
+            (20, 500, true),
+            (21, 2, false),
+            (2, 501, false),
+            (100, 100, false),
+        ] {
+            let header = format!("|{}|\n", vec![" 🐻 "; columns].join("|"));
+            let separator = format!("|{}|\n", vec![" --- "; columns].join("|"));
+            let source = format!("{}{}{}", header, separator, header.repeat(rows));
+            let input = format!("{}\nAfter", source);
+            for mode in [ParseMode::Editable, ParseMode::Grouped] {
+                let doc = parse(&input, mode);
+                assert_eq!(
+                    matches!(doc.blocks[0].kind, BlockKind::Table { .. }),
+                    is_table
+                );
+                assert_eq!(
+                    &input[doc.blocks[0].byte_start as usize..doc.blocks[0].byte_end as usize],
+                    source
+                );
+                let last = doc.blocks.last().unwrap();
+                assert_eq!(
+                    &input[last.byte_start as usize..last.byte_end as usize],
+                    "After"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn surplus_table_cells_remain_literal() {
+        let input = "| A | B |\n| --- | --- |\n| one | two | three |";
+        let blocks = parse_grouped(input);
+        assert!(matches!(blocks[0].kind, BlockKind::Paragraph { .. }));
+        assert_eq!(
+            &input[blocks[0].byte_start as usize..blocks[0].byte_end as usize],
+            input
+        );
+    }
+
     // MARK: - Horizontal rule
 
     #[test]
@@ -3281,6 +3324,7 @@ mod tests {
 
     fn ember_options() -> ParseOptions {
         ParseOptions {
+            semantic_tokens: false,
             image_marker_scheme: Some("ember:".to_string()),
         }
     }
@@ -3356,6 +3400,7 @@ mod tests {
     #[test]
     fn image_marker_custom_scheme_recognised() {
         let options = ParseOptions {
+            semantic_tokens: false,
             image_marker_scheme: Some("cinder:".to_string()),
         };
         let blocks = parse_with_options(
@@ -3386,6 +3431,7 @@ mod tests {
     #[test]
     fn image_marker_interrupts_adjacent_paragraphs() {
         let options = ParseOptions {
+            semantic_tokens: false,
             image_marker_scheme: Some("host:".to_string()),
         };
         let src = "Before\n![](host:DEBD1746-CBBB-4A33-9CB0-4B1A5D956200)\nAfter\n";
